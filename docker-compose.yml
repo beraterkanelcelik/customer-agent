@@ -1,0 +1,148 @@
+version: '3.8'
+
+services:
+  # ============================================
+  # LiveKit Server - WebRTC Infrastructure
+  # ============================================
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: livekit
+    restart: unless-stopped
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
+    environment:
+      - "LIVEKIT_KEYS=devkey: secret"
+    command: --dev --bind 0.0.0.0 --node-ip 127.0.0.1
+    networks:
+      - dealership-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:7880"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # Redis - Shared State Store
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - dealership-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # FastAPI Application - Main Backend
+  # ============================================
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+    container_name: app
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LIVEKIT_URL=ws://livekit:7880
+      - LIVEKIT_API_KEY=devkey
+      - LIVEKIT_API_SECRET=secret
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=sqlite+aiosqlite:///./data/dealership.db
+      - DEBUG=true
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      livekit:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - dealership-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # Voice Worker - STT/TTS + LiveKit Agent
+  # ============================================
+  voice-worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.voice
+    container_name: voice-worker
+    restart: unless-stopped
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LIVEKIT_URL=ws://livekit:7880
+      - LIVEKIT_API_KEY=devkey
+      - LIVEKIT_API_SECRET=secret
+      - APP_API_URL=http://app:8000
+      - REDIS_URL=redis://redis:6379/0
+      # STT Settings
+      - WHISPER_MODEL=${WHISPER_MODEL:-medium}
+      - WHISPER_DEVICE=${WHISPER_DEVICE:-cuda}
+      # TTS Settings (options: piper, edge)
+      - TTS_BACKEND=${TTS_BACKEND:-piper}
+      - PIPER_VOICE=${PIPER_VOICE:-en_US-lessac-high}
+      - EDGE_TTS_VOICE=${EDGE_TTS_VOICE:-en-US-JennyNeural}
+    volumes:
+      - ./models:/app/models
+    # GPU Support - requires NVIDIA Container Toolkit
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      app:
+        condition: service_healthy
+      livekit:
+        condition: service_healthy
+    networks:
+      - dealership-net
+
+  # ============================================
+  # Frontend - React Dashboard
+  # ============================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+      - VITE_WS_URL=ws://localhost:8000
+      - VITE_LIVEKIT_URL=ws://localhost:7880
+    depends_on:
+      - app
+    networks:
+      - dealership-net
+
+networks:
+  dealership-net:
+    driver: bridge
+
+volumes:
+  redis_data:

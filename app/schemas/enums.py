@@ -1,0 +1,77 @@
+from enum import Enum
+
+
+class AgentType(str, Enum):
+    """Agent types in the multi-agent system."""
+    ROUTER = "router"
+    FAQ = "faq"
+    BOOKING = "booking"
+    ESCALATION = "escalation"
+    SLOT_FILLER = "slot_filler"
+    RESPONSE = "response"
+
+
+class IntentType(str, Enum):
+    """User intent classifications."""
+    FAQ = "faq"
+    BOOK_SERVICE = "book_service"
+    BOOK_TEST_DRIVE = "book_test_drive"
+    RESCHEDULE = "reschedule"
+    CANCEL = "cancel"
+    ESCALATION = "escalation"
+    GREETING = "greeting"
+    GOODBYE = "goodbye"
+    GENERAL = "general"
+
+
+class AppointmentType(str, Enum):
+    """Types of appointments."""
+    SERVICE = "service"
+    TEST_DRIVE = "test_drive"
+
+
+class AppointmentStatus(str, Enum):
+    """Appointment statuses."""
+    SCHEDULED = "scheduled"
+    CONFIRMED = "confirmed"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    NO_SHOW = "no_show"
+
+
+class TaskStatus(str, Enum):
+    """Background task statuses."""
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class TaskType(str, Enum):
+    """Background task types."""
+    HUMAN_ESCALATION = "human_escalation"
+    SEND_EMAIL = "send_email"
+    SCHEDULE_CALLBACK = "schedule_callback"
+
+
+class NotificationPriority(str, Enum):
+    """Notification priority levels."""
+    LOW = "low"           # Deliver on next user turn
+    HIGH = "high"         # Deliver at next pause
+    INTERRUPT = "interrupt"  # Interrupt current speech
+
+
+class HumanAgentStatus(str, Enum):
+    """Human agent availability status."""
+    CHECKING = "checking"
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+    CONNECTED = "connected"
+
+
+class MessageRole(str, Enum):
+    """Conversation message roles."""
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+    TOOL = "tool"
