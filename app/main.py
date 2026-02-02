@@ -10,7 +10,7 @@ from app.api.websocket import router as ws_router, get_ws_manager
 from app.database.connection import init_db
 from app.background.state_store import state_store
 from app.background.worker import background_worker
-from app.agents.graph import set_escalation_worker
+# Note: Escalation is now handled via request_human_agent tool which imports background_worker directly
 from app.schemas.task import Notification, BackgroundTask
 
 settings = get_settings()
@@ -32,6 +32,10 @@ async def notification_callback(session_id: str, notification: Notification):
         "priority": notification.priority.value if hasattr(notification.priority, 'value') else notification.priority,
         "task_id": notification.task_id
     })
+
+    # Mark notification as delivered so it won't be re-delivered on next turn
+    await state_store.mark_notification_delivered(session_id, notification.notification_id)
+
     logger.info(f"Pushed notification to session {session_id}: {notification.message[:50]}...")
 
 
@@ -88,8 +92,8 @@ async def lifespan(app: FastAPI):
     logger.info("Connecting to state store...")
     await state_store.connect()
 
-    # Set up background worker
-    set_escalation_worker(background_worker)
+    # Background worker is imported directly by escalation_tools.py
+    # No need to wire it up here anymore
 
     # Set up callbacks for real-time push
     background_worker.set_notification_callback(notification_callback)

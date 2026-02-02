@@ -290,6 +290,33 @@ class ConnectionManager:
         for session_id in all_sessions:
             await self.broadcast(session_id, message)
 
+    async def send_human_joined(self, session_id: str, human_id: str, delay: float = 10.0):
+        """
+        Signal voice worker that a human has joined the conversation.
+
+        This triggers the agent to enter idle mode after the specified delay,
+        allowing the current message to be heard before going silent.
+        """
+        await self.broadcast(session_id, {
+            "type": "human_joined",
+            "human_id": human_id,
+            "delay": delay
+        })
+        print(f"Sent human_joined signal for session {session_id}, human: {human_id}")
+
+    async def send_human_left(self, session_id: str, human_id: Optional[str] = None):
+        """
+        Signal voice worker that a human has left the conversation.
+
+        If human_id is None, all humans are considered to have left.
+        This triggers the agent to exit idle mode and resume normal operation.
+        """
+        await self.broadcast(session_id, {
+            "type": "human_left",
+            "human_id": human_id
+        })
+        print(f"Sent human_left signal for session {session_id}, human: {human_id}")
+
 
 # Global connection manager
 manager = ConnectionManager()

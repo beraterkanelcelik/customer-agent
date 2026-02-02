@@ -237,7 +237,7 @@ async def book_appointment(
                 # Don't fail booking if WebSocket update fails
                 print(f"Failed to send availability update: {e}")
 
-        # Format confirmation - include structured data for frontend display
+        # Format confirmation for display
         date_str = appt_date.strftime("%A, %B %d, %Y")
         time_str = appt_time.strftime("%I:%M %p").lstrip("0")
 
@@ -259,21 +259,26 @@ async def book_appointment(
             if inv:
                 vehicle_info = f"{inv.year} {inv.make} {inv.model}"
 
-        # Build response with BOOKING_CONFIRMED prefix and JSON data
-        response = "BOOKING_CONFIRMED:\n"
-        response += f"Confirmation #: {appointment.id}\n"
+        # Store confirmation data for state update (via slot_tools pattern)
+        from app.tools.slot_tools import _pending_slot_updates
+        if customer_id not in _pending_slot_updates:
+            # Use a special key pattern for booking confirmations
+            pass  # Will be keyed by session_id in graph
+
+        # Build human-readable response
+        response = f"BOOKING_CONFIRMED: Appointment #{appointment.id} booked!\n"
         response += f"Type: {appt_type.display_name}\n"
         response += f"Date: {date_str}\n"
         response += f"Time: {time_str}\n"
-        response += f"Customer: {customer.name}\n"
+        response += f"Customer: {customer.name}"
 
         if customer.email:
-            response += f"Confirmation email will be sent to: {customer.email}\n"
+            response += f"\nConfirmation email will be sent to: {customer.email}"
 
-        # Add structured JSON data for frontend (booking agent will parse this)
+        # Embed structured data for graph to parse (kept for backward compatibility)
+        # The graph's _parse_tool_results handles this
         import json
         confirmation_data = {
-            "status": "BOOKING_CONFIRMED",
             "appointment_id": appointment.id,
             "appointment_type": appointment_type,
             "scheduled_date": appt_date.strftime("%Y-%m-%d"),

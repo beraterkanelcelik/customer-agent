@@ -14,12 +14,16 @@ settings = get_voice_settings()
 # Kokoro TTS
 from .tts_kokoro import kokoro_tts_instance as tts
 
-# Configure logging
+# Configure logging - use our own logger, disable LiveKit's JSON logger
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("voice_worker")
+
+# Disable LiveKit's duplicate JSON logging
+logging.getLogger("livekit.agents").setLevel(logging.WARNING)
+logging.getLogger("livekit").setLevel(logging.WARNING)
 
 
 async def entrypoint(ctx: JobContext):
@@ -54,13 +58,29 @@ async def entrypoint(ctx: JobContext):
             else:
                 logger.info(f"Ignoring audio from non-user: {participant.identity}")
 
+    # Parse human participant prefixes from config
+    human_prefixes = tuple(
+        p.strip() for p in settings.human_participant_prefixes.split(",") if p.strip()
+    )
+    logger.info(f"Human participant prefixes: {human_prefixes}")
+
     @ctx.room.on("participant_connected")
     def on_participant_connected(participant: rtc.RemoteParticipant):
         logger.info(f"Participant connected: {participant.identity}")
 
+        # Check if this is a human participant (sales rep, etc.)
+        if participant.identity.startswith(human_prefixes):
+            logger.info(f"🧑 Human participant joined: {participant.identity}")
+            agent.handle_human_joined(participant.identity)
+
     @ctx.room.on("participant_disconnected")
     def on_participant_disconnected(participant: rtc.RemoteParticipant):
         logger.info(f"Participant disconnected: {participant.identity}")
+
+        # Check if this was a human participant leaving
+        if participant.identity in agent._human_participants:
+            logger.info(f"🧑 Human participant left: {participant.identity}")
+            agent.handle_human_left(participant.identity)
 
     @ctx.room.on("disconnected")
     def on_disconnected():
@@ -152,5 +172,6 @@ if __name__ == "__main__":
             api_key=settings.livekit_api_key,
             api_secret=settings.livekit_api_secret,
             ws_url=settings.livekit_url,
+            job_memory_warn_mb=0,  # Disable memory warnings (models use ~600MB)
         )
     )

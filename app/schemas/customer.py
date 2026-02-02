@@ -63,10 +63,12 @@ class CustomerContext(BaseModel):
     phone: Optional[str] = None
     email: Optional[str] = None
     vehicles: List[dict] = Field(default_factory=list)
+    is_identified: bool = False  # Changed from property to field for serialization
 
-    @property
-    def is_identified(self) -> bool:
-        return self.customer_id is not None
+    def model_post_init(self, __context):
+        """Auto-set is_identified based on customer_id after initialization."""
+        if self.customer_id is not None and not self.is_identified:
+            object.__setattr__(self, 'is_identified', True)
 
     def to_summary(self) -> str:
         """Generate summary string for prompts."""

@@ -4,6 +4,12 @@ Slot extraction tools for the booking agent.
 These tools allow the LLM to store information it extracts from
 the conversation, rather than relying on regex patterns.
 
+Design:
+- Tools return structured responses (SAVED:, PHONE_INCOMPLETE:, etc.)
+- A global dict (_pending_slot_updates) stores updates by session_id
+- The graph's postprocess node reads and clears these updates
+- This pattern allows atomic slot updates without passing state through tools
+
 NOTE: These tools now handle STT normalization automatically.
 Phone numbers with spoken words ("five five five") are converted to digits.
 """

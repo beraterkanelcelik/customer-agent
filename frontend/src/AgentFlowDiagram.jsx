@@ -47,13 +47,13 @@ flowchart TB
 
     subgraph LangGraph["LangGraph Workflow - Tool Calling Loop"]
         direction TB
-        START((Start)) --> NOTIF[Check Notifications]
-        NOTIF --> MODEL[Call Model<br/>LLM + Tools]
-        MODEL --> COND{Has tool_calls?}
-        COND -->|Yes| TOOLS[Tool Node<br/>Execute Tools]
-        TOOLS --> MODEL
-        COND -->|No| PROC[Process Response]
-        PROC --> DONE((End))
+        START((Start)) --> PRE[preprocess_node]
+        PRE --> AGENT[agent_node]
+        AGENT --> COND{has tool_calls?}
+        COND -->|Yes| TOOLS[tool_node]
+        TOOLS --> AGENT
+        COND -->|No| POST[postprocess_node]
+        POST --> DONE((End))
     end
 
     subgraph Capabilities["Agent Capabilities via Tools"]
@@ -76,7 +76,7 @@ flowchart TB
 
 const toolFlowChart = `
 flowchart LR
-    subgraph Tools["Available Tools"]
+    subgraph Tools["Available Tools - 15 Total"]
         direction TB
 
         subgraph FAQ_Tools["FAQ Tools"]
@@ -104,8 +104,9 @@ flowchart LR
             get_date[get_todays_date]
         end
 
-        subgraph Call_Tools["Call Control"]
+        subgraph Call_Tools["Call & Escalation"]
             end_call[end_call]
+            request_human[request_human_agent]
         end
     end
 
@@ -173,6 +174,47 @@ flowchart TB
     style LIST fill:#3b82f6,stroke:#2563eb
 `
 
+const graphNodesChart = `
+flowchart TB
+    subgraph Graph["LangGraph State Machine - graph.py"]
+        direction TB
+
+        subgraph PreNode["preprocess_node"]
+            PRE_DESC["• Check notifications_queue<br/>• Deliver escalation results<br/>• Set prepend_message<br/>• Update human_agent_status"]
+        end
+
+        subgraph AgentNode["agent_node"]
+            AGENT_DESC["• Build context from state<br/>• Inject system prompt<br/>• Call LLM with bound tools<br/>• Return AI message"]
+        end
+
+        subgraph ToolNode["tool_node"]
+            TOOL_DESC["• Extract tool_calls from AI msg<br/>• Inject session_id<br/>• Execute each tool async<br/>• Return ToolMessages"]
+        end
+
+        subgraph PostNode["postprocess_node"]
+            POST_DESC["• Parse tool results<br/>• Update booking_slots<br/>• Update customer context<br/>• Handle confirmations<br/>• Prepend notifications"]
+        end
+
+        subgraph RouterFn["should_continue()"]
+            ROUTER_DESC["Routes based on:<br/>has tool_calls? → tools<br/>else → postprocess"]
+        end
+    end
+
+    PreNode --> AgentNode
+    AgentNode --> RouterFn
+    RouterFn -->|"tool_calls"| ToolNode
+    ToolNode --> AgentNode
+    RouterFn -->|"no tools"| PostNode
+    PostNode --> END_NODE((END))
+
+    style Graph fill:#1e1b4b,stroke:#6366f1
+    style PreNode fill:#312e81,stroke:#8b5cf6
+    style AgentNode fill:#1e3a5f,stroke:#3b82f6
+    style ToolNode fill:#1e3a3f,stroke:#14b8a6
+    style PostNode fill:#3a3a1e,stroke:#eab308
+    style RouterFn fill:#3a1e3f,stroke:#d946ef
+`
+
 const stateFlowChart = `
 flowchart TB
     subgraph State["ConversationState"]
@@ -225,6 +267,7 @@ export default function AgentFlowDiagram() {
   const toolRef = useRef(null)
   const bookingRef = useRef(null)
   const stateRef = useRef(null)
+  const graphNodesRef = useRef(null)
 
   useEffect(() => {
     const renderDiagrams = async () => {
@@ -244,6 +287,10 @@ export default function AgentFlowDiagram() {
         if (stateRef.current) {
           const { svg: stateSvg } = await mermaid.render('state-flow', stateFlowChart)
           stateRef.current.innerHTML = stateSvg
+        }
+        if (graphNodesRef.current) {
+          const { svg: graphNodesSvg } = await mermaid.render('graph-nodes-flow', graphNodesChart)
+          graphNodesRef.current.innerHTML = graphNodesSvg
         }
       } catch (error) {
         console.error('Mermaid render error:', error)
@@ -296,6 +343,17 @@ export default function AgentFlowDiagram() {
           </div>
         </section>
 
+        {/* Graph Nodes Detail - Full Width */}
+        <section className="bg-gray-900/50 backdrop-blur border border-gray-800/50 rounded-2xl overflow-hidden">
+          <div className="px-6 py-4 bg-gradient-to-r from-violet-900/30 to-fuchsia-900/30 border-b border-gray-700/50">
+            <h2 className="text-lg font-semibold text-white">LangGraph Nodes Detail</h2>
+            <p className="text-sm text-gray-400 mt-1">What each node in the graph does (graph.py)</p>
+          </div>
+          <div className="p-6 overflow-x-auto">
+            <div ref={graphNodesRef} className="flex justify-center min-w-[900px]" />
+          </div>
+        </section>
+
         {/* Two column layout */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
@@ -303,7 +361,7 @@ export default function AgentFlowDiagram() {
           <section className="bg-gray-900/50 backdrop-blur border border-gray-800/50 rounded-2xl overflow-hidden">
             <div className="px-6 py-4 bg-gradient-to-r from-teal-900/30 to-cyan-900/30 border-b border-gray-700/50">
               <h2 className="text-lg font-semibold text-white">Available Tools</h2>
-              <p className="text-sm text-gray-400 mt-1">All tools the agent can use</p>
+              <p className="text-sm text-gray-400 mt-1">All 15 tools the agent can use</p>
             </div>
             <div className="p-6 overflow-x-auto">
               <div ref={toolRef} className="flex justify-center" />
@@ -336,14 +394,18 @@ export default function AgentFlowDiagram() {
         {/* Legend */}
         <section className="bg-gray-900/50 backdrop-blur border border-gray-800/50 rounded-2xl p-6">
           <h2 className="text-lg font-semibold text-white mb-4">Key Components</h2>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <div className="flex items-center gap-3">
               <div className="w-4 h-4 rounded bg-indigo-500"></div>
               <span className="text-sm text-gray-300">LangGraph Workflow</span>
             </div>
             <div className="flex items-center gap-3">
+              <div className="w-4 h-4 rounded bg-violet-500"></div>
+              <span className="text-sm text-gray-300">Graph Nodes</span>
+            </div>
+            <div className="flex items-center gap-3">
               <div className="w-4 h-4 rounded bg-teal-500"></div>
-              <span className="text-sm text-gray-300">Agent Capabilities</span>
+              <span className="text-sm text-gray-300">Agent Tools</span>
             </div>
             <div className="flex items-center gap-3">
               <div className="w-4 h-4 rounded bg-blue-500"></div>
@@ -352,6 +414,29 @@ export default function AgentFlowDiagram() {
             <div className="flex items-center gap-3">
               <div className="w-4 h-4 rounded bg-yellow-500"></div>
               <span className="text-sm text-gray-300">State Management</span>
+            </div>
+          </div>
+
+          {/* Node Function Summary */}
+          <div className="mt-6 pt-6 border-t border-gray-700/50">
+            <h3 className="text-md font-semibold text-white mb-3">Graph Node Functions</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
+              <div className="bg-violet-900/20 border border-violet-700/30 rounded-lg p-3">
+                <div className="font-medium text-violet-300 mb-1">preprocess_node</div>
+                <div className="text-gray-400 text-xs">Processes notifications from background tasks (escalation results)</div>
+              </div>
+              <div className="bg-blue-900/20 border border-blue-700/30 rounded-lg p-3">
+                <div className="font-medium text-blue-300 mb-1">agent_node</div>
+                <div className="text-gray-400 text-xs">Invokes LLM with tools bound - all decision making happens here</div>
+              </div>
+              <div className="bg-teal-900/20 border border-teal-700/30 rounded-lg p-3">
+                <div className="font-medium text-teal-300 mb-1">tool_node</div>
+                <div className="text-gray-400 text-xs">Executes tool calls and returns results back to agent</div>
+              </div>
+              <div className="bg-yellow-900/20 border border-yellow-700/30 rounded-lg p-3">
+                <div className="font-medium text-yellow-300 mb-1">postprocess_node</div>
+                <div className="text-gray-400 text-xs">Parses tool results, updates state, handles confirmations</div>
+              </div>
             </div>
           </div>
         </section>

@@ -46,15 +46,31 @@ class BackgroundWorker:
             self._sales_manager = get_sales_manager()
         return self._sales_manager
 
+    def _get_ws_manager(self):
+        """Lazy load WebSocket manager to avoid circular imports."""
+        from app.api.websocket import get_ws_manager
+        return get_ws_manager()
+
     async def _broadcast_task_update(self, session_id: str, task_id: str):
-        """Broadcast task update via callback."""
+        """Broadcast task update via callback.
+
+        Reads from atomic task key first (which has the latest updates),
+        falling back to main state if atomic key doesn't exist.
+        """
         if self.task_update_callback:
-            state = await state_store.get_state(session_id)
-            if state:
-                for task in state.pending_tasks:
-                    if task.task_id == task_id:
-                        await self.task_update_callback(session_id, task)
-                        break
+            # Try to get task from atomic key first (has latest updates)
+            task = await state_store.get_task_from_atomic(session_id, task_id)
+
+            if task:
+                await self.task_update_callback(session_id, task)
+            else:
+                # Fallback to main state if no atomic update
+                state = await state_store.get_state(session_id)
+                if state:
+                    for t in state.pending_tasks:
+                        if t.task_id == task_id:
+                            await self.task_update_callback(session_id, t)
+                            break
 
     async def execute_human_check(
         self,
@@ -72,6 +88,9 @@ class BackgroundWorker:
         1. If sales accepts: bridge the call
         2. If sales declines or times out: schedule callback and send email
         """
+
+        # Initialize full task in atomic storage (avoids race condition with main state)
+        await state_store.init_task_atomic(session_id, task_id, TaskType.HUMAN_ESCALATION)
 
         # Update task status to running
         await state_store.update_task_atomic(session_id, task_id, {
@@ -111,6 +130,17 @@ class BackgroundWorker:
                 "I'm connecting you to them right now."
             )
             priority = NotificationPriority.INTERRUPT
+
+            # Signal voice worker about incoming human so it can enter idle mode
+            # Use delay of 10 seconds to let the customer hear the connection message
+            # IMPORTANT: Use the full participant identity that matches LiveKit (sales_{sales_id})
+            try:
+                ws_manager = self._get_ws_manager()
+                participant_identity = f"sales_{sales_id}"
+                await ws_manager.send_human_joined(session_id, participant_identity, delay=10.0)
+                logger.info(f"[{session_id}] Sent human_joined signal for {participant_identity}")
+            except Exception as e:
+                logger.warning(f"[{session_id}] Failed to send human_joined signal: {e}")
 
         else:
             # Sales not available - schedule callback

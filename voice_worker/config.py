@@ -36,6 +36,17 @@ class VoiceSettings(BaseSettings):
     vad_silence_duration_ms: int = Field(default=500)
     max_speech_duration_s: int = Field(default=30)
 
+    # Idle mode settings (when human joins conference)
+    idle_delay_seconds: float = Field(default=10.0, description="Delay before entering idle after human joins")
+    human_participant_prefixes: str = Field(
+        default="sales_,human_,twilio_",
+        description="Comma-separated prefixes that identify human participants"
+    )
+    idle_resume_message: str = Field(
+        default="I'm back. How can I continue helping you?",
+        description="Message spoken when resuming from idle mode"
+    )
+
     class Config:
         env_file = ".env"
         extra = "ignore"

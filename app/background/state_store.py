@@ -9,6 +9,7 @@ from redis.exceptions import WatchError
 from app.config import get_settings
 from app.schemas.state import ConversationState
 from app.schemas.task import BackgroundTask, Notification
+from app.schemas.enums import TaskStatus, TaskType
 
 settings = get_settings()
 logger = logging.getLogger("app.background.state_store")
@@ -230,6 +231,44 @@ class StateStore:
             await self.add_notification(session_id, notification)
             return True
 
+    async def mark_notification_delivered(self, session_id: str, notification_id: str) -> bool:
+        """
+        Mark a notification as delivered (sent via WebSocket callback).
+
+        Uses a separate Redis SET to track delivered notification IDs.
+        """
+        delivered_key = f"delivered_notifications:{session_id}"
+
+        if self._use_redis:
+            await self._redis.sadd(delivered_key, notification_id)
+            await self._redis.expire(delivered_key, settings.session_timeout_minutes * 60)
+            logger.info(f"[{session_id}] Marked notification as delivered: {notification_id}")
+            return True
+        else:
+            # For memory store, update the notification in state directly
+            state = await self.get_state(session_id)
+            if state:
+                for notif in state.notifications_queue:
+                    if notif.notification_id == notification_id:
+                        notif.delivered = True
+                        break
+                await self.set_state(session_id, state)
+            return True
+
+    async def is_notification_delivered(self, session_id: str, notification_id: str) -> bool:
+        """Check if a notification was already delivered via WebSocket."""
+        delivered_key = f"delivered_notifications:{session_id}"
+
+        if self._use_redis:
+            return await self._redis.sismember(delivered_key, notification_id)
+        else:
+            state = await self.get_state(session_id)
+            if state:
+                for notif in state.notifications_queue:
+                    if notif.notification_id == notification_id:
+                        return notif.delivered
+            return False
+
     async def get_pending_notifications(self, session_id: str) -> list[Notification]:
         """Get all pending notifications from atomic queue."""
         notif_key = f"notifications:{session_id}"
@@ -250,6 +289,69 @@ class StateStore:
                 undelivered = [n for n in state.notifications_queue if not n.delivered]
                 return undelivered
             return []
+
+    async def get_task_from_atomic(self, session_id: str, task_id: str) -> Optional[BackgroundTask]:
+        """
+        Get task from atomic storage (independent of main state).
+
+        This allows broadcasting task updates even before the main state is saved.
+        Falls back to main state if no atomic data exists.
+        """
+        if self._use_redis:
+            task_key = f"task:{session_id}:{task_id}"
+            task_data = await self._redis.get(task_key)
+            if task_data:
+                data = json.loads(task_data)
+                return BackgroundTask(**data)
+
+        # Fallback: try to get from main state
+        state = await self.get_state(session_id)
+        if state:
+            for task in state.pending_tasks:
+                if task.task_id == task_id:
+                    return task
+
+        return None
+
+    async def init_task_atomic(
+        self,
+        session_id: str,
+        task_id: str,
+        task_type: TaskType
+    ) -> bool:
+        """
+        Initialize a task in atomic storage with all required fields.
+
+        This should be called at the start of a background task to ensure
+        the task data exists in atomic storage before any updates.
+        """
+
+        task_key = f"task:{session_id}:{task_id}"
+
+        task_data = {
+            "task_id": task_id,
+            "task_type": task_type.value if hasattr(task_type, 'value') else task_type,
+            "status": TaskStatus.PENDING.value,
+            "created_at": datetime.utcnow().isoformat(),
+            "completed_at": None,
+            "result": None,
+            "human_available": None,
+            "human_agent_id": None,
+            "human_agent_name": None,
+            "callback_scheduled": None
+        }
+
+        if self._use_redis:
+            await self._redis.set(
+                task_key,
+                json.dumps(task_data, default=str),
+                ex=settings.session_timeout_minutes * 60
+            )
+            logger.info(f"[{session_id}] Initialized task {task_id} in atomic storage")
+            return True
+        else:
+            # For memory store, no special handling needed
+            return True
 
     async def update_task_atomic(
         self,
@@ -310,6 +412,11 @@ class StateStore:
         # Merge pending notifications
         pending_notifs = await self.get_pending_notifications(session_id)
         if pending_notifs:
+            # Check which notifications were already delivered via WebSocket
+            for notif in pending_notifs:
+                if await self.is_notification_delivered(session_id, notif.notification_id):
+                    notif.delivered = True
+                    logger.info(f"[{session_id}] Notification {notif.notification_id} already delivered via WebSocket")
             state.notifications_queue.extend(pending_notifs)
             modified = True
             logger.info(f"[{session_id}] Merged {len(pending_notifs)} notifications into state")

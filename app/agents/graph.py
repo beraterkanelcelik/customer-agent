@@ -1,17 +1,17 @@
 """
-Conversation Graph - Proper LangGraph tool-calling pattern.
+Conversation Graph - LLM-driven agent with no hardcoded logic.
+
+The LLM decides everything through tools:
+- Escalation via request_human_agent tool
+- Call ending via end_call tool
+- All booking decisions via booking tools
 
 Flow:
-  check_notifications -> call_model -> (conditional) -> tool_node -> call_model (loop)
-                                    -> END (when no tool calls)
-
-Uses the standard LangGraph pattern:
-1. call_model node invokes LLM with tools bound
-2. Conditional edge checks if response has tool_calls
-3. If tool_calls: route to tool_node, then back to call_model
-4. If no tool_calls: END
+  preprocess -> agent -> (conditional) -> tools -> agent (loop)
+                      -> postprocess -> END
 """
-from typing import Dict, Any, Literal
+from typing import Dict, Any, Literal, List
+from datetime import date, timedelta
 import logging
 
 from langgraph.graph import StateGraph, END
@@ -22,46 +22,196 @@ from app.schemas.state import ConversationState
 from app.schemas.enums import AgentType, HumanAgentStatus
 from app.config import get_settings
 
-# Import tools
-from app.tools.faq_tools import search_faq, list_services
-from app.tools.booking_tools import (
-    check_availability, book_appointment,
-    reschedule_appointment, cancel_appointment,
-    get_customer_appointments, list_inventory
-)
-from app.tools.customer_tools import get_customer, create_customer
-from app.tools.slot_tools import (
-    update_booking_info, set_customer_identified, get_todays_date,
-    get_pending_updates
-)
-from app.tools.call_tools import end_call
-
-from .unified_agent import (
-    UNIFIED_SYSTEM_PROMPT, build_context, UnifiedAgent
-)
+# Import all tools from the unified module
+from app.tools import ALL_TOOLS
 
 settings = get_settings()
 logger = logging.getLogger("app.agents.graph")
 
-# All tools
-ALL_TOOLS = [
-    search_faq,
-    list_services,
-    check_availability,
-    book_appointment,
-    reschedule_appointment,
-    cancel_appointment,
-    get_customer_appointments,
-    list_inventory,
-    get_customer,
-    create_customer,
-    update_booking_info,
-    set_customer_identified,
-    get_todays_date,
-    end_call,
-]
 
-# Create LLM with tools bound
+# ============================================
+# System Prompt - No hardcoded logic, just capabilities
+# ============================================
+
+SYSTEM_PROMPT = """You are a friendly voice assistant for Springfield Auto dealership.
+
+## CURRENT CONTEXT
+{context}
+
+## VOICE/STT AWARENESS - CRITICAL
+
+### Phone Numbers (Automatic Normalization)
+Input comes from speech-to-text which may be messy. The tool handles this automatically:
+- "five five five one two three four five six seven" -> 5551234567
+- "0 1 2 - 3 4 5 - 6 7 8 9" -> 0123456789
+- Mixed: "my number is five 5 five, one two three, 4567" -> 5551234567
+
+Just pass whatever the user says to update_booking_info - it will normalize spoken words to digits.
+ALWAYS confirm the normalized number: "I have (555) 123-4567. Is that correct?"
+If unclear or incomplete, ask them to repeat digit by digit.
+
+### Emails (YOU must normalize)
+Speech-to-text garbles emails - reconstruct intelligently:
+- "at/add/et" -> "@"
+- "dot" -> "."
+- "gmail/g mail/gee mail" -> "gmail"
+Examples: "john add gmail dot com" -> john@gmail.com
+
+ALWAYS confirm: "Your email is john@gmail.com, correct?"
+
+## YOUR TOOLS
+
+### Information
+- search_faq: Answer questions about hours, location, financing, policies
+- list_services: Show service pricing and duration
+- list_inventory: Show vehicles available for test drives
+- get_todays_date: Get current date for scheduling
+
+### Customer Management
+- get_customer: Look up existing customer by phone
+- create_customer: Create new customer record
+- set_customer_identified: Mark customer as verified
+
+### Booking
+- update_booking_info: Save booking details (name, phone, email, date, time, etc.)
+- check_availability: Check if a time slot is open
+- book_appointment: Book the appointment (requires customer_id!)
+- reschedule_appointment: Change appointment date/time
+- cancel_appointment: Cancel an appointment
+- get_customer_appointments: List customer's upcoming bookings
+
+### Call Control
+- end_call: End the voice call gracefully (use when customer says goodbye)
+- request_human_agent: Transfer to human (use when customer asks for a human)
+
+## BOOKING FLOW - FOLLOW THESE STEPS
+
+1. **CUSTOMER INFO FIRST**: Before any booking details:
+   - Ask for NAME
+   - Ask for PHONE
+   - Ask for EMAIL
+   - Call create_customer to save them (this gives you customer_id)
+
+2. **APPOINTMENT TYPE**: Ask if test drive or service
+
+3. **DETAILS**:
+   - Service: Ask what service
+   - Test Drive: Call list_inventory, ask what vehicle
+
+4. **DATE/TIME**:
+   - Ask for preferred DATE
+   - Call check_availability
+   - Confirm time
+
+5. **CONFIRM**: Read back all details, wait for "yes"
+
+6. **BOOK**: Call book_appointment with customer_id
+
+## WHEN TO USE SPECIFIC TOOLS
+
+### request_human_agent
+Call this when customer:
+- Asks to speak with a human, person, manager, supervisor, representative
+- Says "give me a human", "transfer me", "real person", etc.
+- Expresses frustration you can't resolve
+
+### end_call
+Call this when customer:
+- Says goodbye ("bye", "goodbye", "that's all", "thanks, bye")
+- Has no pending needs and is done
+- After booking is complete and they confirm they're done
+
+## VOICE INTERFACE RULES
+- Keep responses SHORT (1-2 sentences) - this is voice
+- Ask ONE question at a time
+- Don't repeat information already collected
+- Be warm and professional
+
+## IMPORTANT
+- You make ALL decisions - no hardcoded logic exists
+- If booking is in progress, stay focused on completing it
+- Handle mixed messages like "thanks, my name is John" - extract the name"""
+
+
+def get_date_context() -> str:
+    """Get current date context for the agent."""
+    today = date.today()
+    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+    lines = [f"TODAY: {today.strftime('%Y-%m-%d')} ({days[today.weekday()]})"]
+
+    upcoming = []
+    for i in range(1, 8):
+        d = today + timedelta(days=i)
+        label = "Tomorrow" if i == 1 else days[d.weekday()]
+        upcoming.append(f"{label}={d.strftime('%Y-%m-%d')}")
+
+    lines.append(f"UPCOMING: {', '.join(upcoming)}")
+    return "\n".join(lines)
+
+
+def build_context(state: ConversationState) -> str:
+    """Build context string showing current state for the LLM."""
+    lines = []
+
+    # Date context
+    lines.append(get_date_context())
+    lines.append("")
+
+    # Customer status
+    if state.customer.is_identified:
+        lines.append(f"CUSTOMER: {state.customer.name} (ID: {state.customer.customer_id}) - VERIFIED")
+    else:
+        lines.append("CUSTOMER: Not yet identified")
+
+    # Booking status
+    slots = state.booking_slots
+    if slots.appointment_type or any([
+        slots.service_type, slots.vehicle_interest, slots.preferred_date,
+        slots.preferred_time, slots.customer_name, slots.customer_phone
+    ]):
+        lines.append("")
+        lines.append("BOOKING IN PROGRESS:")
+
+        if slots.appointment_type:
+            appt_type = slots.appointment_type.value if hasattr(slots.appointment_type, 'value') else slots.appointment_type
+            lines.append(f"  Type: {appt_type.upper()}")
+        else:
+            lines.append("  Type: NOT SET")
+
+        if slots.vehicle_interest:
+            lines.append(f"  Vehicle: {slots.vehicle_interest}")
+        if slots.service_type:
+            lines.append(f"  Service: {slots.service_type}")
+
+        lines.append(f"  Date: {slots.preferred_date or 'NOT SET'}")
+        lines.append(f"  Time: {slots.preferred_time or 'NOT SET'}")
+        lines.append(f"  Name: {slots.customer_name or 'NOT SET'}")
+        lines.append(f"  Phone: {slots.customer_phone or 'NOT SET'}")
+        lines.append(f"  Email: {slots.customer_email or 'NOT SET'}")
+
+        missing = slots.get_missing_slots(is_new_customer=not state.customer.is_identified)
+        if missing:
+            lines.append(f"  STILL NEEDED: {', '.join(missing)}")
+        else:
+            lines.append("  ALL INFO COLLECTED - Ready to book!")
+    else:
+        lines.append("")
+        lines.append("BOOKING: No booking in progress")
+
+    # Escalation status
+    if state.escalation_in_progress:
+        status = state.human_agent_status.value if state.human_agent_status else "checking"
+        lines.append("")
+        lines.append(f"ESCALATION: In progress ({status})")
+
+    return "\n".join(lines)
+
+
+# ============================================
+# LLM Setup
+# ============================================
+
 llm = ChatOpenAI(
     model=settings.openai_model,
     temperature=0.3,
@@ -69,10 +219,107 @@ llm = ChatOpenAI(
 )
 llm_with_tools = llm.bind_tools(ALL_TOOLS)
 
-# Custom tool node that injects session_id
-async def custom_tool_node(state: ConversationState) -> Dict[str, Any]:
+
+# ============================================
+# Node Functions
+# ============================================
+
+async def preprocess_node(state: ConversationState) -> Dict[str, Any]:
     """
-    Execute tools from the last AI message, injecting session_id where needed.
+    Preprocess: Handle notifications from background tasks.
+
+    Checks for any pending notifications (e.g., escalation results)
+    and prepares them to be prepended to the response.
+    """
+    updates = {}
+
+    notifications = state.get_undelivered_notifications()
+    if not notifications:
+        return updates
+
+    logger.info(f"[PREPROCESS] Found {len(notifications)} undelivered notifications")
+
+    # Sort by priority
+    priority_order = {"interrupt": 3, "high": 2, "low": 1}
+
+    def get_priority(n):
+        priority = n.priority.value if hasattr(n.priority, 'value') else n.priority
+        return priority_order.get(priority, 0)
+
+    notifications.sort(key=get_priority, reverse=True)
+    top_notification = notifications[0]
+
+    # Mark as delivered
+    for n in state.notifications_queue:
+        if n.notification_id == top_notification.notification_id:
+            n.delivered = True
+
+    updates["prepend_message"] = top_notification.message
+    updates["notifications_queue"] = state.notifications_queue
+
+    # Update escalation status based on task result
+    for task in state.pending_tasks:
+        if task.task_id == top_notification.task_id:
+            task_status = task.status.value if hasattr(task.status, 'value') else task.status
+            if task_status == "completed":
+                updates["waiting_for_background"] = False
+                if task.human_available:
+                    updates["human_agent_status"] = HumanAgentStatus.CONNECTED
+                else:
+                    updates["human_agent_status"] = HumanAgentStatus.UNAVAILABLE
+                    updates["escalation_in_progress"] = False
+
+    logger.info(f"[PREPROCESS] Processed notification: {top_notification.message[:50]}...")
+    return updates
+
+
+async def agent_node(state: ConversationState) -> Dict[str, Any]:
+    """
+    Agent node: Invoke the LLM with tools.
+
+    The LLM makes ALL decisions - no hardcoded logic here.
+    """
+    logger.info(f"[AGENT] Processing with {len(state.messages)} messages")
+
+    # Build context and system prompt
+    context = build_context(state)
+    system_prompt = SYSTEM_PROMPT.format(context=context)
+
+    # Build messages
+    messages = [SystemMessage(content=system_prompt)]
+
+    # Add conversation history (limit to last 20 messages)
+    history = state.messages[-20:] if len(state.messages) > 20 else state.messages
+    for msg in history:
+        if isinstance(msg, HumanMessage):
+            messages.append(HumanMessage(content=msg.content))
+        elif isinstance(msg, AIMessage):
+            if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                messages.append(msg)
+            elif msg.content:
+                messages.append(AIMessage(content=msg.content))
+        elif isinstance(msg, ToolMessage):
+            messages.append(msg)
+
+    logger.info(f"[AGENT] Sending {len(messages)} messages to LLM")
+
+    # Invoke LLM
+    response = await llm_with_tools.ainvoke(messages)
+
+    if hasattr(response, 'tool_calls') and response.tool_calls:
+        logger.info(f"[AGENT] Tool calls: {[tc['name'] for tc in response.tool_calls]}")
+    else:
+        content = response.content[:100] if response.content else 'empty'
+        logger.info(f"[AGENT] Response: '{content}...'")
+
+    return {"messages": [response]}
+
+
+async def tool_node(state: ConversationState) -> Dict[str, Any]:
+    """
+    Tool node: Execute tool calls from the LLM.
+
+    Injects session_id where needed and executes tools.
     """
     messages = state.messages
     if not messages:
@@ -103,39 +350,20 @@ async def custom_tool_node(state: ConversationState) -> Dict[str, Any]:
         tool = tool_map[tool_name]
 
         try:
-            # Inject session_id if the tool needs it
+            # Inject session_id if tool needs it
             if hasattr(tool, 'args_schema') and 'session_id' in tool.args_schema.model_fields:
                 tool_args['session_id'] = state.session_id
 
             result = await tool.ainvoke(tool_args)
-            logger.info(f"[TOOL_NODE] {tool_name} result: {str(result)[:200]}")
-
-            # Handle booking confirmation data embedded in result
-            result_str = str(result)
-            if "BOOKING_CONFIRMED" in result_str and "__CONFIRMATION_DATA__:" in result_str:
-                try:
-                    import json
-                    marker = "__CONFIRMATION_DATA__:"
-                    json_start = result_str.index(marker) + len(marker)
-                    json_str = result_str[json_start:].strip()
-                    confirmation_data = json.loads(json_str)
-
-                    from app.tools.slot_tools import _pending_slot_updates
-                    if state.session_id not in _pending_slot_updates:
-                        _pending_slot_updates[state.session_id] = {}
-                    _pending_slot_updates[state.session_id]["_confirmed_appointment"] = confirmation_data
-
-                    result_str = result_str[:result_str.index(marker)].strip()
-                except Exception as parse_err:
-                    logger.warning(f"[TOOL_NODE] Failed to parse confirmation: {parse_err}")
+            logger.info(f"[TOOLS] {tool_name} result: {str(result)[:200]}")
 
             results.append(ToolMessage(
-                content=result_str,
+                content=str(result),
                 tool_call_id=tool_id
             ))
 
         except Exception as e:
-            logger.error(f"[TOOL_NODE] Tool error: {e}")
+            logger.error(f"[TOOLS] Error in {tool_name}: {e}")
             results.append(ToolMessage(
                 content=f"Tool error: {str(e)}",
                 tool_call_id=tool_id
@@ -143,148 +371,33 @@ async def custom_tool_node(state: ConversationState) -> Dict[str, Any]:
 
     return {"messages": results}
 
-# Keep unified agent for escalation handling
-unified_agent = UnifiedAgent()
 
-
-# ============================================
-# Node Functions
-# ============================================
-
-async def check_notifications_node(state: ConversationState) -> Dict[str, Any]:
-    """Check for and process any pending notifications from background tasks."""
-    updates = {}
-
-    notifications = state.get_undelivered_notifications()
-
-    if not notifications:
-        return updates
-
-    logger.info(f"[NOTIFICATIONS] Found {len(notifications)} undelivered notifications")
-
-    priority_order = {"interrupt": 3, "high": 2, "low": 1}
-
-    def get_priority(n):
-        priority = n.priority.value if hasattr(n.priority, 'value') else n.priority
-        return priority_order.get(priority, 0)
-
-    notifications.sort(key=get_priority, reverse=True)
-    top_notification = notifications[0]
-
-    for n in state.notifications_queue:
-        if n.notification_id == top_notification.notification_id:
-            n.delivered = True
-
-    updates["prepend_message"] = top_notification.message
-    updates["notifications_queue"] = state.notifications_queue
-
-    for task in state.pending_tasks:
-        if task.task_id == top_notification.task_id:
-            task_status = task.status.value if hasattr(task.status, 'value') else task.status
-            if task_status == "completed":
-                updates["waiting_for_background"] = False
-                if task.human_available:
-                    updates["human_agent_status"] = HumanAgentStatus.CONNECTED
-                else:
-                    updates["human_agent_status"] = HumanAgentStatus.UNAVAILABLE
-                    updates["escalation_in_progress"] = False
-
-    logger.info(f"[NOTIFICATIONS] Processed notification: {top_notification.message[:50]}...")
-
-    return updates
-
-
-async def call_model_node(state: ConversationState) -> Dict[str, Any]:
+def should_continue(state: ConversationState) -> Literal["tools", "postprocess"]:
     """
-    Call the LLM with tools bound.
-
-    This node:
-    1. Builds the system prompt with current context
-    2. Invokes the LLM with all messages
-    3. Returns the AI response (which may contain tool_calls)
-    """
-    logger.info(f"[CALL_MODEL] State has {len(state.messages)} messages")
-
-    # Get the last user message for logging
-    user_message = ""
-    for msg in reversed(state.messages):
-        if isinstance(msg, HumanMessage):
-            user_message = msg.content
-            break
-
-    logger.info(f"[CALL_MODEL] Processing: '{user_message}'")
-
-    # Build context and system prompt
-    context = build_context(state)
-    system_prompt = UNIFIED_SYSTEM_PROMPT.format(context=context)
-
-    # Build messages list with system prompt at the start
-    messages = [SystemMessage(content=system_prompt)]
-
-    # Add conversation history (limit to last 20 messages to avoid context overflow)
-    history = state.messages[-20:] if len(state.messages) > 20 else state.messages
-    for msg in history:
-        if isinstance(msg, HumanMessage):
-            messages.append(HumanMessage(content=msg.content))
-        elif isinstance(msg, AIMessage):
-            # Include tool_calls if present (needed for tool response context)
-            if hasattr(msg, 'tool_calls') and msg.tool_calls:
-                messages.append(msg)
-            elif msg.content:
-                messages.append(AIMessage(content=msg.content))
-        elif isinstance(msg, ToolMessage):
-            # Include tool results so LLM can see what tools returned
-            messages.append(msg)
-
-    logger.info(f"[CALL_MODEL] Sending {len(messages)} messages to LLM")
-
-    # Invoke LLM with tools
-    response = await llm_with_tools.ainvoke(messages)
-
-    # Log what happened
-    if hasattr(response, 'tool_calls') and response.tool_calls:
-        logger.info(f"[CALL_MODEL] Tool calls: {[tc['name'] for tc in response.tool_calls]}")
-    else:
-        logger.info(f"[CALL_MODEL] Final response: '{response.content[:100] if response.content else 'empty'}...'")
-
-    # Return the response as a message to add to state
-    return {"messages": [response]}
-
-
-def should_continue(state: ConversationState) -> Literal["tool_node", "process_response"]:
-    """
-    Conditional edge: decide whether to call tools or finish.
-
-    If the last message has tool_calls, route to tool_node.
-    Otherwise, route to process_response (which handles final response).
+    Decide whether to execute tools or finish.
     """
     messages = state.messages
     if not messages:
-        return "process_response"
+        return "postprocess"
 
     last_message = messages[-1]
 
-    # Check if this is an AI message with tool calls
     if isinstance(last_message, AIMessage):
         if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
-            logger.info(f"[SHOULD_CONTINUE] Has tool calls, routing to tool_node")
-            return "tool_node"
+            logger.info("[ROUTING] Has tool calls -> tools")
+            return "tools"
 
-    logger.info(f"[SHOULD_CONTINUE] No tool calls, routing to process_response")
-    return "process_response"
+    logger.info("[ROUTING] No tool calls -> postprocess")
+    return "postprocess"
 
 
-async def process_response_node(state: ConversationState) -> Dict[str, Any]:
+async def postprocess_node(state: ConversationState) -> Dict[str, Any]:
     """
-    Process the final response and apply any state updates from tools.
+    Postprocess: Apply state updates from tool results.
 
-    This node:
-    1. Gets the final AI response
-    2. Applies slot updates from tool calls
-    3. Handles customer identification
-    4. Handles booking confirmations
+    Parses structured tool responses and updates state accordingly.
     """
-    logger.info(f"[PROCESS_RESPONSE] Processing final response")
+    logger.info("[POSTPROCESS] Processing final response")
 
     updates = {
         "current_agent": AgentType.RESPONSE,
@@ -302,23 +415,44 @@ async def process_response_node(state: ConversationState) -> Dict[str, Any]:
         response_content = "I'm here to help. What can I do for you?"
         updates["messages"] = [AIMessage(content=response_content)]
 
-    # Prepend notification message if present
+    # Prepend notification if present
     if state.prepend_message:
         response_content = f"{state.prepend_message} {response_content}"
         updates["prepend_message"] = None
-        # Update the last message with prepended content
         updates["messages"] = [AIMessage(content=response_content)]
 
-    logger.info(f"[PROCESS_RESPONSE] Response: '{response_content[:80]}...'")
+    # Parse tool results for state updates
+    updates.update(await _parse_tool_results(state))
 
-    # Apply slot updates from tools
-    from app.schemas.state import BookingSlots
+    logger.info(f"[POSTPROCESS] Response: '{response_content[:80]}...'")
+    return updates
+
+
+async def _parse_tool_results(state: ConversationState) -> Dict[str, Any]:
+    """
+    Parse tool results and extract state updates.
+
+    Handles structured responses like:
+    - BOOKING_UPDATE: slot updates
+    - ESCALATION_STARTED: escalation state
+    - CALL_ENDING: call termination
+    - BOOKING_CONFIRMED: appointment confirmation
+    """
+    updates = {}
+
+    # Get slot updates from the global store (legacy, to be migrated)
+    from app.tools.slot_tools import get_pending_updates
+    from app.schemas.state import BookingSlots, ConfirmedAppointment
+    from app.schemas.customer import CustomerContext
     from app.schemas.enums import AppointmentType
+    from app.schemas.task import BackgroundTask
+    from app.schemas.enums import TaskType, TaskStatus
+    import time
 
     raw_updates = get_pending_updates(state.session_id)
 
     if raw_updates:
-        logger.info(f"[PROCESS_RESPONSE] Applying slot updates: {raw_updates}")
+        logger.info(f"[POSTPROCESS] Applying slot updates: {raw_updates}")
         slots = state.booking_slots.model_copy()
 
         if "appointment_type" in raw_updates:
@@ -335,9 +469,8 @@ async def process_response_node(state: ConversationState) -> Dict[str, Any]:
 
         updates["booking_slots"] = slots
 
-        # Check for customer identification
+        # Customer identification
         if raw_updates.get("_customer_identified"):
-            from app.schemas.customer import CustomerContext
             updates["customer"] = CustomerContext(
                 customer_id=raw_updates.get("_customer_id"),
                 name=raw_updates.get("_customer_name"),
@@ -346,9 +479,8 @@ async def process_response_node(state: ConversationState) -> Dict[str, Any]:
                 is_identified=True
             )
 
-        # Check for confirmed appointment
+        # Confirmed appointment
         if raw_updates.get("_confirmed_appointment"):
-            from app.schemas.state import ConfirmedAppointment
             conf_data = raw_updates["_confirmed_appointment"]
             updates["confirmed_appointment"] = ConfirmedAppointment(
                 appointment_id=conf_data.get("appointment_id"),
@@ -360,7 +492,54 @@ async def process_response_node(state: ConversationState) -> Dict[str, Any]:
                 vehicle=conf_data.get("vehicle"),
                 confirmation_email=conf_data.get("customer_email")
             )
-            logger.info(f"[PROCESS_RESPONSE] Booking confirmed: #{conf_data.get('appointment_id')}")
+            logger.info(f"[POSTPROCESS] Booking confirmed: #{conf_data.get('appointment_id')}")
+
+    # Also scan tool messages for structured responses
+    for msg in state.messages:
+        if isinstance(msg, ToolMessage):
+            content = msg.content
+
+            # Handle escalation started
+            if content.startswith("ESCALATION_STARTED:"):
+                # Parse task_id from response
+                try:
+                    parts = content.split("|", 1)
+                    if "task_id=" in parts[0]:
+                        task_id = parts[0].split("task_id=")[1].strip()
+                        task = BackgroundTask(
+                            task_id=task_id,
+                            task_type=TaskType.HUMAN_ESCALATION,
+                            status=TaskStatus.PENDING
+                        )
+                        updates["escalation_in_progress"] = True
+                        updates["pending_tasks"] = state.pending_tasks + [task]
+                        updates["waiting_for_background"] = True
+                        logger.info(f"[POSTPROCESS] Escalation started: {task_id}")
+                except Exception as e:
+                    logger.warning(f"[POSTPROCESS] Failed to parse escalation: {e}")
+
+            # Handle booking confirmation (parse embedded JSON if present)
+            elif "BOOKING_CONFIRMED" in content and "__CONFIRMATION_DATA__:" in content:
+                try:
+                    import json
+                    marker = "__CONFIRMATION_DATA__:"
+                    json_start = content.index(marker) + len(marker)
+                    json_str = content[json_start:].strip()
+                    conf_data = json.loads(json_str)
+
+                    updates["confirmed_appointment"] = ConfirmedAppointment(
+                        appointment_id=conf_data.get("appointment_id"),
+                        appointment_type=conf_data.get("appointment_type"),
+                        scheduled_date=conf_data.get("scheduled_date"),
+                        scheduled_time=conf_data.get("scheduled_time"),
+                        customer_name=conf_data.get("customer_name"),
+                        service_type=conf_data.get("service_type"),
+                        vehicle=conf_data.get("vehicle"),
+                        confirmation_email=conf_data.get("customer_email")
+                    )
+                    logger.info(f"[POSTPROCESS] Booking confirmed from tool: #{conf_data.get('appointment_id')}")
+                except Exception as e:
+                    logger.warning(f"[POSTPROCESS] Failed to parse confirmation: {e}")
 
     return updates
 
@@ -371,51 +550,47 @@ async def process_response_node(state: ConversationState) -> Dict[str, Any]:
 
 def create_graph():
     """
-    Create the LangGraph conversation graph with proper tool-calling pattern.
+    Create the conversation graph.
 
     Flow:
-    check_notifications -> call_model -> should_continue conditional edge
-                                      |-> tool_node -> call_model (loop)
-                                      |-> process_response -> END
+    preprocess -> agent -> (conditional)
+                        |-> tools -> agent (loop back)
+                        |-> postprocess -> END
     """
-
     workflow = StateGraph(ConversationState)
 
     # Add nodes
-    workflow.add_node("check_notifications", check_notifications_node)
-    workflow.add_node("call_model", call_model_node)
-    workflow.add_node("tool_node", custom_tool_node)
-    workflow.add_node("process_response", process_response_node)
+    workflow.add_node("preprocess", preprocess_node)
+    workflow.add_node("agent", agent_node)
+    workflow.add_node("tools", tool_node)
+    workflow.add_node("postprocess", postprocess_node)
 
-    # Set entry point
-    workflow.set_entry_point("check_notifications")
+    # Entry point
+    workflow.set_entry_point("preprocess")
 
     # Edges
-    workflow.add_edge("check_notifications", "call_model")
+    workflow.add_edge("preprocess", "agent")
 
-    # Conditional edge after call_model
+    # Conditional routing after agent
     workflow.add_conditional_edges(
-        "call_model",
+        "agent",
         should_continue,
         {
-            "tool_node": "tool_node",
-            "process_response": "process_response"
+            "tools": "tools",
+            "postprocess": "postprocess"
         }
     )
 
-    # After tools, go back to call_model to process results
-    workflow.add_edge("tool_node", "call_model")
+    # After tools, back to agent
+    workflow.add_edge("tools", "agent")
 
-    # After processing response, end
-    workflow.add_edge("process_response", END)
+    # After postprocess, end
+    workflow.add_edge("postprocess", END)
 
-    # Compile
-    graph = workflow.compile()
-
-    return graph
+    return workflow.compile()
 
 
-# Create global graph instance
+# Global graph instance
 conversation_graph = create_graph()
 
 
@@ -434,11 +609,12 @@ async def process_message(
     if current_state is None:
         current_state = ConversationState(session_id=session_id)
 
-    logger.info(f"[GRAPH] process_message called with {len(current_state.messages)} existing messages")
+    logger.info(f"[GRAPH] Processing message with {len(current_state.messages)} existing messages")
 
+    # Add the new user message
     all_messages = current_state.messages + [HumanMessage(content=user_message)]
-    logger.info(f"[GRAPH] Total messages for graph: {len(all_messages)}")
 
+    # Build input state
     input_state = {
         "session_id": current_state.session_id,
         "messages": all_messages,
@@ -466,16 +642,11 @@ async def process_message(
         result = await conversation_graph.ainvoke(input_state)
         return ConversationState(**result)
     except Exception as e:
-        logger.error(f"Graph invocation error: {e}", exc_info=True)
-        error_msg = "I apologize, but I encountered an error processing your request. Please try again."
+        logger.error(f"Graph error: {e}", exc_info=True)
+        error_msg = "I apologize, but I encountered an error. Please try again."
         return ConversationState(
             **{
                 **input_state,
                 "messages": input_state["messages"] + [AIMessage(content=error_msg)]
             }
         )
-
-
-def set_escalation_worker(worker):
-    """Set the background worker for escalation handling."""
-    unified_agent.set_background_worker(worker)

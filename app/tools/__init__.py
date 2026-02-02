@@ -15,6 +15,33 @@ from .slot_tools import (
     get_pending_updates,
     clear_pending_updates
 )
+from .call_tools import end_call, get_pending_call_action, clear_pending_call_actions
+from .escalation_tools import request_human_agent
+
+# All tools available to the agent
+ALL_TOOLS = [
+    # FAQ
+    search_faq,
+    list_services,
+    # Customer
+    get_customer,
+    create_customer,
+    # Booking
+    check_availability,
+    book_appointment,
+    reschedule_appointment,
+    cancel_appointment,
+    get_customer_appointments,
+    list_inventory,
+    # Slot management
+    update_booking_info,
+    set_customer_identified,
+    get_todays_date,
+    # Call control
+    end_call,
+    # Escalation (LLM decides when to use)
+    request_human_agent,
+]
 
 __all__ = [
     # FAQ
@@ -36,4 +63,12 @@ __all__ = [
     "get_todays_date",
     "get_pending_updates",
     "clear_pending_updates",
+    # Call control
+    "end_call",
+    "get_pending_call_action",
+    "clear_pending_call_actions",
+    # Escalation
+    "request_human_agent",
+    # All tools list
+    "ALL_TOOLS",
 ]

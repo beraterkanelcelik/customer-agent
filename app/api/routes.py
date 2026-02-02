@@ -685,3 +685,34 @@ async def list_appointments(
         appointments=[AppointmentResponse.model_validate(a) for a in appointments],
         total=len(appointments)
     )
+
+
+# ============================================
+# Agent Status Endpoint
+# ============================================
+
+@router.post("/agent-status")
+async def report_agent_status(data: dict):
+    """
+    Receive agent status updates from voice worker.
+
+    Used to track when the agent enters/exits idle mode (e.g., when human joins).
+    Forwards status to frontend via WebSocket.
+    """
+    ws_manager = get_ws_manager()
+
+    session_id = data.get("session_id")
+    agent_status = data.get("status")  # "idle" or "active"
+    reason = data.get("reason")  # "human_joined" or "human_left"
+
+    if session_id and agent_status:
+        await ws_manager.send_message(session_id, {
+            "type": "agent_status",
+            "status": agent_status,
+            "reason": reason,
+            "human_participants": data.get("human_participants", []),
+            "idle_duration_seconds": data.get("idle_duration_seconds")
+        })
+        print(f"Agent status update: {session_id} -> {agent_status} ({reason})")
+
+    return {"status": "ok"}

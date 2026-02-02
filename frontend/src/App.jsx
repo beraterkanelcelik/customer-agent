@@ -169,13 +169,8 @@ export default function App() {
         break
 
       case 'end_call':
-        // Add farewell to transcript
-        setTranscript(prev => [...prev, {
-          role: 'assistant',
-          content: data.farewell_message || 'Thank you for calling. Goodbye!',
-          timestamp: new Date().toLocaleTimeString(),
-          isSystemMessage: true
-        }])
+        // Note: Don't add farewell to transcript here - the agent already sent it as its response
+        // This message is just a signal to end the call after the agent finishes speaking
         // End call after 10 seconds to let agent fully speak the goodbye message
         setTimeout(async () => {
           try {

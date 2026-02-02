@@ -6,6 +6,7 @@ import logging
 import wave
 import numpy as np
 import time
+from datetime import datetime
 from typing import Optional, Set
 
 import websockets
@@ -64,6 +65,12 @@ class DealershipVoiceAgent:
         self._audio_tasks: Set[asyncio.Task] = set()
         self._ws_task: Optional[asyncio.Task] = None
 
+        # Idle mode state (when human joins conference)
+        self.is_idle = False
+        self._idle_entered_at: Optional[datetime] = None
+        self._human_participants: Set[str] = set()
+        self._idle_task: Optional[asyncio.Task] = None
+
     async def initialize(self):
         """Initialize the agent."""
         # Models may already be preloaded, but ensure they're ready
@@ -85,6 +92,15 @@ class DealershipVoiceAgent:
     async def cleanup(self):
         """Cleanup resources."""
         self._running = False
+
+        # Cancel idle mode task if running
+        if self._idle_task and not self._idle_task.done():
+            self._idle_task.cancel()
+            try:
+                await self._idle_task
+            except asyncio.CancelledError:
+                pass
+        self._idle_task = None
 
         # Cancel WebSocket listener
         if self._ws_task and not self._ws_task.done():
@@ -115,6 +131,108 @@ class DealershipVoiceAgent:
             self.http_client = None
 
         logger.info("Voice agent cleaned up")
+
+    async def enter_idle_mode(self, delay_seconds: float = None):
+        """
+        Enter idle mode after delay.
+
+        In idle mode, the agent stops processing audio (listening/responding)
+        but keeps the connection alive for when the human leaves.
+        """
+        if delay_seconds is None:
+            delay_seconds = settings.idle_delay_seconds
+
+        logger.info(f"Entering idle mode in {delay_seconds} seconds...")
+
+        # Wait for the delay (allows current speech to finish and customer to hear it)
+        await asyncio.sleep(delay_seconds)
+
+        # Check if we should still enter idle (human might have left during delay)
+        if not self._human_participants:
+            logger.info("No human participants remaining, skipping idle mode")
+            return
+
+        self.is_idle = True
+        self._idle_entered_at = datetime.utcnow()
+        logger.info("🔇 Agent entered IDLE MODE - stopped listening while human is present")
+
+        # Notify backend/frontend about idle state
+        try:
+            await self.http_client.post(
+                "/api/agent-status",
+                json={
+                    "session_id": self.session_id,
+                    "status": "idle",
+                    "reason": "human_joined",
+                    "human_participants": list(self._human_participants)
+                }
+            )
+        except Exception as e:
+            logger.warning(f"Failed to notify backend of idle state: {e}")
+
+    async def exit_idle_mode(self, speak_resume: bool = True):
+        """
+        Resume from idle mode when human leaves.
+
+        Optionally speaks a resume message to let the customer know the agent is back.
+        """
+        if not self.is_idle:
+            return
+
+        self.is_idle = False
+        idle_duration = None
+        if self._idle_entered_at:
+            idle_duration = (datetime.utcnow() - self._idle_entered_at).total_seconds()
+        self._idle_entered_at = None
+
+        logger.info(f"🔊 Agent exited IDLE MODE - resuming normal operation (was idle for {idle_duration:.1f}s)" if idle_duration else "🔊 Agent exited IDLE MODE")
+
+        # Notify backend/frontend about active state
+        try:
+            await self.http_client.post(
+                "/api/agent-status",
+                json={
+                    "session_id": self.session_id,
+                    "status": "active",
+                    "reason": "human_left",
+                    "idle_duration_seconds": idle_duration
+                }
+            )
+        except Exception as e:
+            logger.warning(f"Failed to notify backend of active state: {e}")
+
+        # Speak resume message
+        if speak_resume:
+            await self.speak(settings.idle_resume_message)
+
+    def handle_human_joined(self, human_id: str):
+        """
+        Handle a human participant joining the room.
+
+        Tracks the participant and schedules idle mode entry.
+        """
+        self._human_participants.add(human_id)
+        logger.info(f"Human joined: {human_id}. Total humans: {len(self._human_participants)}")
+
+        # Cancel any existing idle task (e.g., if another human joins while waiting)
+        if self._idle_task and not self._idle_task.done():
+            self._idle_task.cancel()
+
+        # Schedule idle mode entry
+        self._idle_task = asyncio.create_task(self.enter_idle_mode())
+
+    def handle_human_left(self, human_id: str):
+        """
+        Handle a human participant leaving the room.
+
+        Exits idle mode if no humans remain.
+        """
+        self._human_participants.discard(human_id)
+        logger.info(f"Human left: {human_id}. Remaining humans: {len(self._human_participants)}")
+
+        # Exit idle mode if no humans remaining
+        if not self._human_participants and self.is_idle:
+            asyncio.create_task(self.exit_idle_mode())
 
     async def run(self, ctx):
         """Run the agent in the room context."""
@@ -222,6 +340,35 @@ class DealershipVoiceAgent:
                             elif data.get("type") == "heartbeat":
                                 await ws.send(json.dumps({"type": "ping"}))
 
+                            # Handle human joined signal (from backend)
+                            elif data.get("type") == "human_joined":
+                                human_id = data.get("human_id", "unknown_human")
+                                delay = data.get("delay", settings.idle_delay_seconds)
+                                logger.info(f"Received human_joined signal: {human_id}")
+                                self._human_participants.add(human_id)
+
+                                # Cancel any existing idle task
+                                if self._idle_task and not self._idle_task.done():
+                                    self._idle_task.cancel()
+
+                                # Schedule idle mode entry with specified delay
+                                self._idle_task = asyncio.create_task(self.enter_idle_mode(delay))
+
+                            # Handle human left signal (from backend)
+                            elif data.get("type") == "human_left":
+                                human_id = data.get("human_id")
+                                logger.info(f"Received human_left signal: {human_id}")
+
+                                if human_id:
+                                    self._human_participants.discard(human_id)
+                                else:
+                                    # Clear all if no specific human_id
+                                    self._human_participants.clear()
+
+                                # Exit idle mode if no humans remaining
+                                if not self._human_participants and self.is_idle:
+                                    asyncio.create_task(self.exit_idle_mode())
+
                         except asyncio.TimeoutError:
                             # Send ping to keep connection alive
                             try:
@@ -273,6 +420,10 @@ class DealershipVoiceAgent:
 
     async def _process_audio_frame(self, frame: rtc.AudioFrame):
         """Process a single audio frame for VAD."""
+        # Skip processing while in idle mode (human is handling the conversation)
+        if self.is_idle:
+            return
+
         audio_data = np.frombuffer(frame.data, dtype=np.int16)
 
         # Calculate RMS energy (normalized)
