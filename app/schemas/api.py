@@ -82,7 +82,12 @@ class ChatResponse(BaseModel):
     # State snapshot
     customer: Optional[CustomerContext] = None
     booking_slots: Optional[Dict[str, Any]] = None
+    confirmed_appointment: Optional[Dict[str, Any]] = None
     pending_tasks: List[BackgroundTask] = Field(default_factory=list)
+
+    # Escalation state
+    escalation_in_progress: bool = False
+    human_agent_status: Optional[str] = None
 
 
 class VoiceTokenResponse(BaseModel):
@@ -113,6 +118,7 @@ class WSStateUpdate(WSMessage):
     human_agent_status: Optional[str] = None
     customer: Optional[CustomerContext] = None
     booking_slots: Optional[Dict[str, Any]] = None
+    confirmed_appointment: Optional[Dict[str, Any]] = None
     pending_tasks: List[BackgroundTask] = Field(default_factory=list)
 
 
@@ -177,3 +183,36 @@ class CustomerListResponse(BaseModel):
     """Customer list."""
     customers: List[CustomerResponse]
     total: int
+
+
+# ============================================
+# Availability Schemas
+# ============================================
+
+class AvailabilitySlotResponse(BaseModel):
+    """Single availability slot."""
+    id: int
+    slot_time: str  # HH:MM format
+    appointment_type: str
+    is_available: bool
+    inventory_id: Optional[int] = None  # For test drives - which car
+    vehicle_name: Optional[str] = None  # e.g., "2025 Toyota Camry"
+
+    class Config:
+        from_attributes = True
+
+
+class AvailabilityDayResponse(BaseModel):
+    """Availability for a single day."""
+    date: str  # YYYY-MM-DD format
+    day_name: str  # Monday, Tuesday, etc.
+    is_open: bool
+    slots: List[AvailabilitySlotResponse]
+
+
+class AvailabilityResponse(BaseModel):
+    """Full availability response for calendar view."""
+    start_date: str
+    end_date: str
+    days: List[AvailabilityDayResponse]
+    total_available: int

@@ -59,6 +59,20 @@ async def task_update_callback(session_id: str, task: BackgroundTask):
     })
     logger.info(f"Pushed task update to session {session_id}: {task.task_id} -> {status}")
 
+    # For escalation tasks, also send state_update with human_agent_status
+    if task_type == "human_escalation" and status == "completed":
+        human_agent_status = "connected" if task.human_available else "unavailable"
+        escalation_in_progress = task.human_available  # Only stay in progress if connected
+
+        await ws_manager.broadcast(session_id, {
+            "type": "state_update",
+            "session_id": session_id,
+            "current_agent": "unified",
+            "escalation_in_progress": escalation_in_progress,
+            "human_agent_status": human_agent_status
+        })
+        logger.info(f"Pushed escalation state update: {human_agent_status}")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

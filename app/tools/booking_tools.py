@@ -1,4 +1,5 @@
 from langchain_core.tools import tool
+from pydantic import BaseModel, Field
 from typing import Optional, Literal
 from datetime import date, time, datetime, timedelta
 from sqlalchemy import select, and_
@@ -6,29 +7,64 @@ from sqlalchemy import select, and_
 from app.database.connection import get_db_context
 from app.database.models import (
     Appointment, AppointmentTypeModel, ServiceType,
-    Inventory, Customer
+    Inventory, Customer, AvailabilitySlot
 )
 
 
-@tool
+class CheckAvailabilityInput(BaseModel):
+    """Input schema for check_availability tool."""
+    appointment_type: Literal["service", "test_drive"] = Field(
+        description="Type of appointment: 'service' or 'test_drive'"
+    )
+    preferred_date: str = Field(description="Date in YYYY-MM-DD format (e.g., '2025-02-15')")
+    preferred_time: Optional[str] = Field(None, description="Time in HH:MM 24-hour format (e.g., '14:00')")
+
+
+class BookAppointmentInput(BaseModel):
+    """Input schema for book_appointment tool."""
+    customer_id: int = Field(description="Customer's database ID from get_customer or create_customer")
+    appointment_type: Literal["service", "test_drive"] = Field(
+        description="Type of appointment: 'service' or 'test_drive'"
+    )
+    scheduled_date: str = Field(description="Date in YYYY-MM-DD format")
+    scheduled_time: str = Field(description="Time in HH:MM 24-hour format")
+    service_type_id: Optional[int] = Field(None, description="Service type ID (required for service appointments)")
+    inventory_id: Optional[int] = Field(None, description="Vehicle inventory ID (required for test drives)")
+    vehicle_id: Optional[int] = Field(None, description="Customer's vehicle ID for service")
+    notes: Optional[str] = Field(None, description="Optional notes for the appointment")
+
+
+class RescheduleInput(BaseModel):
+    """Input schema for reschedule_appointment tool."""
+    appointment_id: int = Field(description="The appointment ID to reschedule")
+    new_date: str = Field(description="New date in YYYY-MM-DD format")
+    new_time: str = Field(description="New time in HH:MM 24-hour format")
+
+
+class CancelInput(BaseModel):
+    """Input schema for cancel_appointment tool."""
+    appointment_id: int = Field(description="The appointment ID to cancel")
+    reason: Optional[str] = Field(None, description="Optional reason for cancellation")
+
+
+class GetAppointmentsInput(BaseModel):
+    """Input schema for get_customer_appointments tool."""
+    customer_id: int = Field(description="The customer's database ID")
+
+
+class ListInventoryInput(BaseModel):
+    """Input schema for list_inventory tool."""
+    make: Optional[str] = Field(None, description="Filter by manufacturer (e.g., 'Toyota')")
+    max_results: int = Field(5, description="Maximum results to return (default 5)")
+
+
+@tool(args_schema=CheckAvailabilityInput)
 async def check_availability(
     appointment_type: Literal["service", "test_drive"],
     preferred_date: str,
     preferred_time: Optional[str] = None
 ) -> str:
-    """
-    Check available time slots for an appointment.
-
-    Use this before booking to find available times.
-
-    Args:
-        appointment_type: Either "service" or "test_drive"
-        preferred_date: Date in YYYY-MM-DD format
-        preferred_time: Optional time in HH:MM format (24-hour)
-
-    Returns:
-        Available time slots or suggestion for next available date.
-    """
+    """Check available time slots for an appointment. Use before booking."""
     # Parse date
     try:
         check_date = datetime.strptime(preferred_date, "%Y-%m-%d").date()
@@ -100,7 +136,7 @@ async def check_availability(
     return f"SLOTS: On {date_display}, available times are: {slots_display}{more}"
 
 
-@tool
+@tool(args_schema=BookAppointmentInput)
 async def book_appointment(
     customer_id: int,
     appointment_type: Literal["service", "test_drive"],
@@ -111,27 +147,7 @@ async def book_appointment(
     vehicle_id: Optional[int] = None,
     notes: Optional[str] = None
 ) -> str:
-    """
-    Book an appointment for a customer.
-
-    Call this after:
-    1. Customer is identified (have customer_id)
-    2. Availability confirmed
-    3. All required info collected
-
-    Args:
-        customer_id: Customer's database ID
-        appointment_type: "service" or "test_drive"
-        scheduled_date: Date in YYYY-MM-DD format
-        scheduled_time: Time in HH:MM format (24-hour)
-        service_type_id: Required for service - the service type ID
-        inventory_id: Required for test_drive - vehicle to test
-        vehicle_id: Optional - customer's vehicle ID for service
-        notes: Optional notes
-
-    Returns:
-        Booking confirmation or error.
-    """
+    """Book an appointment. Requires customer_id, type, date, time. Call after availability is confirmed."""
     # Parse datetime
     try:
         appt_date = datetime.strptime(scheduled_date, "%Y-%m-%d").date()
@@ -183,10 +199,67 @@ async def book_appointment(
         await session.commit()
         await session.refresh(appointment)
 
-        # Format confirmation
+        # Mark availability slot as booked
+        # For test drives, also filter by inventory_id since there's one slot per vehicle
+        slot_conditions = [
+            AvailabilitySlot.slot_date == appt_date,
+            AvailabilitySlot.slot_time == appt_time,
+            AvailabilitySlot.appointment_type == appointment_type,
+            AvailabilitySlot.is_available == True
+        ]
+        if inventory_id and appointment_type == "test_drive":
+            slot_conditions.append(AvailabilitySlot.inventory_id == inventory_id)
+
+        slot_stmt = select(AvailabilitySlot).where(and_(*slot_conditions))
+        slot_result = await session.execute(slot_stmt)
+        # Use first() instead of scalar_one_or_none() to handle edge cases
+        availability_slot = slot_result.scalars().first()
+
+        if availability_slot:
+            availability_slot.is_available = False
+            availability_slot.booked_appointment_id = appointment.id
+            await session.commit()
+
+            # Send WebSocket update for availability change
+            try:
+                from app.api.websocket import get_ws_manager
+                import asyncio
+                ws_manager = get_ws_manager()
+                asyncio.create_task(
+                    ws_manager.broadcast_availability_update(
+                        slot_date=appt_date.strftime("%Y-%m-%d"),
+                        slot_time=appt_time.strftime("%H:%M"),
+                        appointment_type=appointment_type,
+                        is_available=False
+                    )
+                )
+            except Exception as e:
+                # Don't fail booking if WebSocket update fails
+                print(f"Failed to send availability update: {e}")
+
+        # Format confirmation - include structured data for frontend display
         date_str = appt_date.strftime("%A, %B %d, %Y")
         time_str = appt_time.strftime("%I:%M %p").lstrip("0")
 
+        # Get service type name if available
+        service_name = None
+        if service_type_id:
+            stmt = select(ServiceType).where(ServiceType.id == service_type_id)
+            result = await session.execute(stmt)
+            service = result.scalar_one_or_none()
+            if service:
+                service_name = service.name
+
+        # Get vehicle info if available
+        vehicle_info = None
+        if inventory_id:
+            stmt = select(Inventory).where(Inventory.id == inventory_id)
+            result = await session.execute(stmt)
+            inv = result.scalar_one_or_none()
+            if inv:
+                vehicle_info = f"{inv.year} {inv.make} {inv.model}"
+
+        # Build response with BOOKING_CONFIRMED prefix and JSON data
         response = "BOOKING_CONFIRMED:\n"
         response += f"Confirmation #: {appointment.id}\n"
         response += f"Type: {appt_type.display_name}\n"
@@ -197,26 +270,31 @@ async def book_appointment(
         if customer.email:
             response += f"Confirmation email will be sent to: {customer.email}\n"
 
+        # Add structured JSON data for frontend (booking agent will parse this)
+        import json
+        confirmation_data = {
+            "status": "BOOKING_CONFIRMED",
+            "appointment_id": appointment.id,
+            "appointment_type": appointment_type,
+            "scheduled_date": appt_date.strftime("%Y-%m-%d"),
+            "scheduled_time": appt_time.strftime("%H:%M"),
+            "customer_name": customer.name,
+            "customer_email": customer.email,
+            "service_type": service_name,
+            "vehicle": vehicle_info
+        }
+        response += f"\n__CONFIRMATION_DATA__:{json.dumps(confirmation_data)}"
+
         return response
 
 
-@tool
+@tool(args_schema=RescheduleInput)
 async def reschedule_appointment(
     appointment_id: int,
     new_date: str,
     new_time: str
 ) -> str:
-    """
-    Reschedule an existing appointment to a new date/time.
-
-    Args:
-        appointment_id: The appointment ID to reschedule
-        new_date: New date in YYYY-MM-DD format
-        new_time: New time in HH:MM format (24-hour)
-
-    Returns:
-        Confirmation of reschedule or error.
-    """
+    """Reschedule an existing appointment to a new date/time."""
     try:
         appt_date = datetime.strptime(new_date, "%Y-%m-%d").date()
         appt_time = datetime.strptime(new_time, "%H:%M").time()
@@ -250,21 +328,12 @@ async def reschedule_appointment(
         return f"RESCHEDULED: Appointment #{appointment_id} moved from {old_date} at {old_time} to {new_date_str} at {new_time_str}."
 
 
-@tool
+@tool(args_schema=CancelInput)
 async def cancel_appointment(
     appointment_id: int,
     reason: Optional[str] = None
 ) -> str:
-    """
-    Cancel an existing appointment.
-
-    Args:
-        appointment_id: The appointment ID to cancel
-        reason: Optional reason for cancellation
-
-    Returns:
-        Cancellation confirmation.
-    """
+    """Cancel an existing appointment."""
     async with get_db_context() as session:
         stmt = select(Appointment).where(Appointment.id == appointment_id)
         result = await session.execute(stmt)
@@ -285,20 +354,9 @@ async def cancel_appointment(
         return f"CANCELLED: Appointment #{appointment_id} has been cancelled."
 
 
-@tool
+@tool(args_schema=GetAppointmentsInput)
 async def get_customer_appointments(customer_id: int) -> str:
-    """
-    Get all upcoming appointments for a customer.
-
-    Use this when customer wants to reschedule but doesn't
-    know their appointment details.
-
-    Args:
-        customer_id: The customer's database ID
-
-    Returns:
-        List of appointments or indication none found.
-    """
+    """Get all upcoming appointments for a customer. Use when customer wants to reschedule or cancel."""
     async with get_db_context() as session:
         stmt = select(Appointment).where(
             and_(
@@ -323,24 +381,12 @@ async def get_customer_appointments(customer_id: int) -> str:
         return "\n".join(lines)
 
 
-@tool
+@tool(args_schema=ListInventoryInput)
 async def list_inventory(
     make: Optional[str] = None,
     max_results: int = 5
 ) -> str:
-    """
-    List vehicles available for test drives.
-
-    Use when customer wants to see what cars are available
-    or is interested in test driving.
-
-    Args:
-        make: Optional filter by manufacturer (e.g., "Toyota")
-        max_results: Maximum results to return (default 5)
-
-    Returns:
-        List of available vehicles.
-    """
+    """List vehicles available for test drives. Use when customer asks about available cars."""
     async with get_db_context() as session:
         stmt = select(Inventory).where(Inventory.is_available == True)
 

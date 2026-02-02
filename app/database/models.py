@@ -136,3 +136,34 @@ class EscalationRequest(Base):
     status = Column(String(20), default="pending")
     human_agent_id = Column(String(50))
     created_at = Column(DateTime, server_default=func.now())
+
+
+class AvailabilitySlot(Base):
+    """
+    Pre-generated availability slots for appointment scheduling.
+
+    These slots are populated on app startup for the next 30 days,
+    following business hours and excluding Sundays and lunch breaks.
+
+    For test drives, each vehicle has its own availability slots.
+    """
+    __tablename__ = "availability_slots"
+
+    id = Column(Integer, primary_key=True)
+    slot_date = Column(Date, nullable=False, index=True)
+    slot_time = Column(Time, nullable=False)
+    appointment_type = Column(String(20), nullable=False)  # "service" or "test_drive"
+    inventory_id = Column(Integer, ForeignKey("inventory.id"), nullable=True)  # For test drives - which car
+    is_available = Column(Boolean, default=True, index=True)
+    booked_appointment_id = Column(Integer, ForeignKey("appointments.id"), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    # Relationships
+    appointment = relationship("Appointment", lazy="joined")
+    vehicle = relationship("Inventory", lazy="joined")
+
+    __table_args__ = (
+        Index("idx_availability_date_type", "slot_date", "appointment_type"),
+        Index("idx_availability_available", "slot_date", "is_available"),
+        Index("idx_availability_vehicle", "inventory_id", "slot_date"),
+    )

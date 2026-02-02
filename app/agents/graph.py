@@ -1,46 +1,150 @@
-from typing import Literal, Dict, Any
+"""
+Conversation Graph - Proper LangGraph tool-calling pattern.
+
+Flow:
+  check_notifications -> call_model -> (conditional) -> tool_node -> call_model (loop)
+                                    -> END (when no tool calls)
+
+Uses the standard LangGraph pattern:
+1. call_model node invokes LLM with tools bound
+2. Conditional edge checks if response has tool_calls
+3. If tool_calls: route to tool_node, then back to call_model
+4. If no tool_calls: END
+"""
+from typing import Dict, Any, Literal
+import logging
+
 from langgraph.graph import StateGraph, END
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
+from langchain_openai import ChatOpenAI
 
 from app.schemas.state import ConversationState
-from app.schemas.enums import AgentType, IntentType, HumanAgentStatus, TaskStatus, TaskType, AppointmentType
-from app.schemas.task import Notification, NotificationPriority
+from app.schemas.enums import AgentType, HumanAgentStatus
+from app.config import get_settings
 
-from .router_agent import RouterAgent
-from .faq_agent import FAQAgent
-from .booking_agent import BookingAgent
-from .escalation_agent import EscalationAgent
-from .response_generator import ResponseGenerator
-from app.schemas.customer import CustomerContext
-from app.tools.slot_tools import normalize_phone_number, normalize_email
+# Import tools
+from app.tools.faq_tools import search_faq, list_services
+from app.tools.booking_tools import (
+    check_availability, book_appointment,
+    reschedule_appointment, cancel_appointment,
+    get_customer_appointments, list_inventory
+)
+from app.tools.customer_tools import get_customer, create_customer
+from app.tools.slot_tools import (
+    update_booking_info, set_customer_identified, get_todays_date,
+    get_pending_updates
+)
+from app.tools.call_tools import end_call
 
+from .unified_agent import (
+    UNIFIED_SYSTEM_PROMPT, build_context, UnifiedAgent
+)
 
-# Initialize agents
-router_agent = RouterAgent()
-faq_agent = FAQAgent()
-booking_agent = BookingAgent()
-escalation_agent = EscalationAgent()
-response_generator = ResponseGenerator()
+settings = get_settings()
+logger = logging.getLogger("app.agents.graph")
 
+# All tools
+ALL_TOOLS = [
+    search_faq,
+    list_services,
+    check_availability,
+    book_appointment,
+    reschedule_appointment,
+    cancel_appointment,
+    get_customer_appointments,
+    list_inventory,
+    get_customer,
+    create_customer,
+    update_booking_info,
+    set_customer_identified,
+    get_todays_date,
+    end_call,
+]
 
-def get_last_user_message(state: ConversationState) -> str:
-    """Extract the last user message from state."""
-    for msg in reversed(state.messages):
-        if isinstance(msg, HumanMessage):
-            return msg.content
-    return ""
+# Create LLM with tools bound
+llm = ChatOpenAI(
+    model=settings.openai_model,
+    temperature=0.3,
+    api_key=settings.openai_api_key
+)
+llm_with_tools = llm.bind_tools(ALL_TOOLS)
 
+# Custom tool node that injects session_id
+async def custom_tool_node(state: ConversationState) -> Dict[str, Any]:
+    """
+    Execute tools from the last AI message, injecting session_id where needed.
+    """
+    messages = state.messages
+    if not messages:
+        return {"messages": []}
 
-def get_chat_history(state: ConversationState, exclude_last: bool = True) -> list:
-    """Extract chat history from state."""
-    messages = state.messages[:-1] if exclude_last and state.messages else state.messages
-    history = []
-    for msg in messages:
-        if isinstance(msg, HumanMessage):
-            history.append(HumanMessage(content=msg.content))
-        elif isinstance(msg, AIMessage):
-            history.append(AIMessage(content=msg.content))
-    return history
+    last_message = messages[-1]
+    if not isinstance(last_message, AIMessage):
+        return {"messages": []}
+
+    if not hasattr(last_message, 'tool_calls') or not last_message.tool_calls:
+        return {"messages": []}
+
+    tool_map = {tool.name: tool for tool in ALL_TOOLS}
+    results = []
+
+    for tool_call in last_message.tool_calls:
+        tool_name = tool_call['name']
+        tool_args = tool_call['args'].copy()
+        tool_id = tool_call['id']
+
+        if tool_name not in tool_map:
+            results.append(ToolMessage(
+                content=f"Unknown tool: {tool_name}",
+                tool_call_id=tool_id
+            ))
+            continue
+
+        tool = tool_map[tool_name]
+
+        try:
+            # Inject session_id if the tool needs it
+            if hasattr(tool, 'args_schema') and 'session_id' in tool.args_schema.model_fields:
+                tool_args['session_id'] = state.session_id
+
+            result = await tool.ainvoke(tool_args)
+            logger.info(f"[TOOL_NODE] {tool_name} result: {str(result)[:200]}")
+
+            # Handle booking confirmation data embedded in result
+            result_str = str(result)
+            if "BOOKING_CONFIRMED" in result_str and "__CONFIRMATION_DATA__:" in result_str:
+                try:
+                    import json
+                    marker = "__CONFIRMATION_DATA__:"
+                    json_start = result_str.index(marker) + len(marker)
+                    json_str = result_str[json_start:].strip()
+                    confirmation_data = json.loads(json_str)
+
+                    from app.tools.slot_tools import _pending_slot_updates
+                    if state.session_id not in _pending_slot_updates:
+                        _pending_slot_updates[state.session_id] = {}
+                    _pending_slot_updates[state.session_id]["_confirmed_appointment"] = confirmation_data
+
+                    result_str = result_str[:result_str.index(marker)].strip()
+                except Exception as parse_err:
+                    logger.warning(f"[TOOL_NODE] Failed to parse confirmation: {parse_err}")
+
+            results.append(ToolMessage(
+                content=result_str,
+                tool_call_id=tool_id
+            ))
+
+        except Exception as e:
+            logger.error(f"[TOOL_NODE] Tool error: {e}")
+            results.append(ToolMessage(
+                content=f"Tool error: {str(e)}",
+                tool_call_id=tool_id
+            ))
+
+    return {"messages": results}
+
+# Keep unified agent for escalation handling
+unified_agent = UnifiedAgent()
 
 
 # ============================================
@@ -49,22 +153,16 @@ def get_chat_history(state: ConversationState, exclude_last: bool = True) -> lis
 
 async def check_notifications_node(state: ConversationState) -> Dict[str, Any]:
     """Check for and process any pending notifications from background tasks."""
-
     updates = {}
 
-    # Get undelivered notifications sorted by priority
     notifications = state.get_undelivered_notifications()
 
     if not notifications:
         return updates
 
-    # Process highest priority notification
-    # Use string keys to handle both enum and string values
-    priority_order = {
-        "interrupt": 3,
-        "high": 2,
-        "low": 1
-    }
+    logger.info(f"[NOTIFICATIONS] Found {len(notifications)} undelivered notifications")
+
+    priority_order = {"interrupt": 3, "high": 2, "low": 1}
 
     def get_priority(n):
         priority = n.priority.value if hasattr(n.priority, 'value') else n.priority
@@ -73,16 +171,13 @@ async def check_notifications_node(state: ConversationState) -> Dict[str, Any]:
     notifications.sort(key=get_priority, reverse=True)
     top_notification = notifications[0]
 
-    # Mark as delivered
     for n in state.notifications_queue:
         if n.notification_id == top_notification.notification_id:
             n.delivered = True
 
-    # Set prepend message
     updates["prepend_message"] = top_notification.message
     updates["notifications_queue"] = state.notifications_queue
 
-    # Update task status if this completes an escalation
     for task in state.pending_tasks:
         if task.task_id == top_notification.task_id:
             task_status = task.status.value if hasattr(task.status, 'value') else task.status
@@ -94,295 +189,180 @@ async def check_notifications_node(state: ConversationState) -> Dict[str, Any]:
                     updates["human_agent_status"] = HumanAgentStatus.UNAVAILABLE
                     updates["escalation_in_progress"] = False
 
+    logger.info(f"[NOTIFICATIONS] Processed notification: {top_notification.message[:50]}...")
+
     return updates
 
 
-async def router_node(state: ConversationState) -> Dict[str, Any]:
-    """Route user message to appropriate agent."""
-    import logging
-    logger = logging.getLogger("app.agents.graph")
-
-    logger.info(f"[ROUTER] State has {len(state.messages)} messages")
-    for i, msg in enumerate(state.messages):
-        msg_type = type(msg).__name__
-        content = msg.content[:50] if hasattr(msg, 'content') else str(msg)[:50]
-        logger.info(f"[ROUTER]   msg[{i}] {msg_type}: {content}...")
-
-    # Get the last user message
-    user_message = ""
-    for msg in reversed(state.messages):
-        if isinstance(msg, HumanMessage):
-            user_message = msg.content
-            break
-
-    if not user_message:
-        return {"detected_intent": IntentType.GENERAL, "confidence": 0.0}
-
-    # Get conversation history for context
-    history = state.get_conversation_history(max_turns=5)
-    logger.info(f"[ROUTER] History for LLM:\n{history}")
-
-    # Classify intent
-    result = await router_agent.classify(user_message, history)
-
-    logger.info(f"Router classified: intent={result.intent}, entities={result.entities}")
-
-    # Build response with intent
-    response = {
-        "detected_intent": result.intent,
-        "confidence": result.confidence,
-        "current_agent": AgentType.ROUTER
-    }
-
-    # IMPORTANT: Extract and save entities from router to booking_slots
-    # This ensures information isn't lost before reaching the booking agent
-    if result.entities:
-        updated_slots = state.booking_slots.model_copy()
-        entities = result.entities
-
-        # Extract phone number - use normalization function to handle spoken numbers
-        if entities.get("phone"):
-            phone = normalize_phone_number(str(entities["phone"]))
-            if len(phone) >= 7:  # Accept shorter phone numbers too
-                updated_slots.customer_phone = phone
-
-        # Extract name
-        if entities.get("name"):
-            updated_slots.customer_name = entities["name"]
-
-        # Extract email - use normalization function
-        if entities.get("email"):
-            email = normalize_email(entities["email"])
-            if "@" in email and "." in email:
-                updated_slots.customer_email = email
-
-        # Extract date
-        if entities.get("date"):
-            updated_slots.preferred_date = entities["date"]
-
-        # Extract time
-        if entities.get("time"):
-            updated_slots.preferred_time = entities["time"]
-
-        # Extract service type
-        if entities.get("service_type"):
-            updated_slots.service_type = entities["service_type"]
-
-        # Extract vehicle info
-        vehicle = entities.get("vehicle_make", "") + " " + entities.get("vehicle_model", "")
-        vehicle = vehicle.strip()
-        if vehicle:
-            updated_slots.vehicle_interest = vehicle
-
-        response["booking_slots"] = updated_slots
-        logger.info(f"Saved entities to booking_slots: phone={updated_slots.customer_phone}, name={updated_slots.customer_name}, email={updated_slots.customer_email}")
-
-    return response
-
-
-async def faq_agent_node(state: ConversationState) -> Dict[str, Any]:
-    """Handle FAQ queries."""
-
-    user_message = ""
-    for msg in reversed(state.messages):
-        if isinstance(msg, HumanMessage):
-            user_message = msg.content
-            break
-
-    # Convert messages to chat history format
-    chat_history = []
-    for msg in state.messages[:-1]:  # Exclude last message
-        if isinstance(msg, HumanMessage):
-            chat_history.append(HumanMessage(content=msg.content))
-        elif isinstance(msg, AIMessage):
-            chat_history.append(AIMessage(content=msg.content))
-
-    response = await faq_agent.handle(user_message, chat_history)
-
-    return {
-        "current_agent": AgentType.FAQ,
-        "messages": [AIMessage(content=response)]
-    }
-
-
-async def booking_agent_node(state: ConversationState) -> Dict[str, Any]:
-    """Handle booking requests."""
-    import logging
-    logger = logging.getLogger("app.agents.graph")
-
-    logger.info(f"[BOOKING] State has {len(state.messages)} messages")
-    for i, msg in enumerate(state.messages):
-        msg_type = type(msg).__name__
-        content = getattr(msg, 'content', str(msg))[:50] if hasattr(msg, 'content') else str(msg)[:50]
-        logger.info(f"[BOOKING]   msg[{i}]: {msg_type} = '{content}...'")
-
-    user_message = ""
-    for msg in reversed(state.messages):
-        if isinstance(msg, HumanMessage):
-            user_message = msg.content
-            break
-
-    if not user_message:
-        logger.warning(f"[BOOKING] No HumanMessage found in state.messages!")
-        # Fallback: look for dict-style messages
-        for msg in reversed(state.messages):
-            if isinstance(msg, dict) and msg.get('type') in ('human', 'HumanMessage'):
-                user_message = msg.get('content', '')
-                logger.info(f"[BOOKING] Found dict message: '{user_message}'")
-                break
-
-    logger.info(f"[BOOKING] Processing: '{user_message}'")
-
-    # Pre-set appointment type based on detected intent (helps booking agent)
-    intent = state.detected_intent
-    intent_value = intent.value if hasattr(intent, 'value') else intent
-
-    if intent_value == "book_test_drive" and state.booking_slots.appointment_type is None:
-        state.booking_slots.appointment_type = AppointmentType.TEST_DRIVE
-        logger.info(f"[BOOKING] Auto-set appointment_type to TEST_DRIVE based on intent")
-    elif intent_value == "book_service" and state.booking_slots.appointment_type is None:
-        state.booking_slots.appointment_type = AppointmentType.SERVICE
-        logger.info(f"[BOOKING] Auto-set appointment_type to SERVICE based on intent")
-
-    chat_history = []
-    for msg in state.messages[:-1]:
-        if isinstance(msg, HumanMessage):
-            chat_history.append(HumanMessage(content=msg.content))
-        elif isinstance(msg, AIMessage):
-            chat_history.append(AIMessage(content=msg.content))
-
-    # Call booking agent - it handles everything with full context
-    response, updated_slots, raw_updates = await booking_agent.handle(
-        user_message,
-        state,
-        chat_history
-    )
-    logger.info(f"[BOOKING] Agent response: '{response[:80]}...'")
-
-    result = {
-        "current_agent": AgentType.BOOKING,
-        "booking_slots": updated_slots,
-        "messages": [AIMessage(content=response)]
-    }
-
-    # Check for customer identification from set_customer_identified tool
-    if raw_updates.get("_customer_identified"):
-        customer = CustomerContext(
-            customer_id=raw_updates.get("_customer_id"),
-            name=raw_updates.get("_customer_name"),
-            phone=updated_slots.customer_phone,
-            email=updated_slots.customer_email
-        )
-        result["customer"] = customer
-
-    return result
-
-
-async def escalation_agent_node(state: ConversationState) -> Dict[str, Any]:
-    """Handle escalation requests."""
-
-    user_message = ""
-    for msg in reversed(state.messages):
-        if isinstance(msg, HumanMessage):
-            user_message = msg.content
-            break
-
-    response, task = await escalation_agent.handle(user_message, state)
-
-    # Add task to pending tasks
-    pending_tasks = state.pending_tasks.copy()
-    pending_tasks.append(task)
-
-    return {
-        "current_agent": AgentType.ESCALATION,
-        "escalation_in_progress": True,
-        "human_agent_status": HumanAgentStatus.CHECKING,
-        "waiting_for_background": True,
-        "pending_tasks": pending_tasks,
-        "messages": [AIMessage(content=response)]
-    }
-
-
-async def respond_node(state: ConversationState) -> Dict[str, Any]:
+async def call_model_node(state: ConversationState) -> Dict[str, Any]:
     """
-    Generate final response for simple intents or pass through agent responses.
+    Call the LLM with tools bound.
 
-    This node is simplified - agents now handle everything with full context.
-    We just need to:
-    1. Use existing agent response if present
-    2. Generate response for simple intents (greeting, goodbye, general)
-    3. Handle notification prepending
+    This node:
+    1. Builds the system prompt with current context
+    2. Invokes the LLM with all messages
+    3. Returns the AI response (which may contain tool_calls)
     """
-    import logging
-    logger = logging.getLogger("app.agents.graph")
+    logger.info(f"[CALL_MODEL] State has {len(state.messages)} messages")
 
+    # Get the last user message for logging
     user_message = ""
     for msg in reversed(state.messages):
         if isinstance(msg, HumanMessage):
             user_message = msg.content
             break
 
-    logger.info(f"[RESPOND] Processing: '{user_message}', intent: {state.detected_intent}")
+    logger.info(f"[CALL_MODEL] Processing: '{user_message}'")
 
-    # Check if we already have a response from another agent
-    last_msg = state.messages[-1] if state.messages else None
-    existing_response = last_msg.content if isinstance(last_msg, AIMessage) else None
+    # Build context and system prompt
+    context = build_context(state)
+    system_prompt = UNIFIED_SYSTEM_PROMPT.format(context=context)
 
-    if existing_response:
-        # Agent already generated a response - use it
-        response = existing_response
-        logger.info(f"[RESPOND] Using existing agent response")
-        should_add_message = False
+    # Build messages list with system prompt at the start
+    messages = [SystemMessage(content=system_prompt)]
+
+    # Add conversation history (limit to last 20 messages to avoid context overflow)
+    history = state.messages[-20:] if len(state.messages) > 20 else state.messages
+    for msg in history:
+        if isinstance(msg, HumanMessage):
+            messages.append(HumanMessage(content=msg.content))
+        elif isinstance(msg, AIMessage):
+            # Include tool_calls if present (needed for tool response context)
+            if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                messages.append(msg)
+            elif msg.content:
+                messages.append(AIMessage(content=msg.content))
+        elif isinstance(msg, ToolMessage):
+            # Include tool results so LLM can see what tools returned
+            messages.append(msg)
+
+    logger.info(f"[CALL_MODEL] Sending {len(messages)} messages to LLM")
+
+    # Invoke LLM with tools
+    response = await llm_with_tools.ainvoke(messages)
+
+    # Log what happened
+    if hasattr(response, 'tool_calls') and response.tool_calls:
+        logger.info(f"[CALL_MODEL] Tool calls: {[tc['name'] for tc in response.tool_calls]}")
     else:
-        # Generate response for simple intents (greeting, goodbye, general)
-        response = await response_generator.generate(user_message, state)
-        logger.info(f"[RESPOND] Generated response: '{response[:50]}...'")
-        should_add_message = True
+        logger.info(f"[CALL_MODEL] Final response: '{response.content[:100] if response.content else 'empty'}...'")
+
+    # Return the response as a message to add to state
+    return {"messages": [response]}
+
+
+def should_continue(state: ConversationState) -> Literal["tool_node", "process_response"]:
+    """
+    Conditional edge: decide whether to call tools or finish.
+
+    If the last message has tool_calls, route to tool_node.
+    Otherwise, route to process_response (which handles final response).
+    """
+    messages = state.messages
+    if not messages:
+        return "process_response"
+
+    last_message = messages[-1]
+
+    # Check if this is an AI message with tool calls
+    if isinstance(last_message, AIMessage):
+        if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
+            logger.info(f"[SHOULD_CONTINUE] Has tool calls, routing to tool_node")
+            return "tool_node"
+
+    logger.info(f"[SHOULD_CONTINUE] No tool calls, routing to process_response")
+    return "process_response"
+
+
+async def process_response_node(state: ConversationState) -> Dict[str, Any]:
+    """
+    Process the final response and apply any state updates from tools.
+
+    This node:
+    1. Gets the final AI response
+    2. Applies slot updates from tool calls
+    3. Handles customer identification
+    4. Handles booking confirmations
+    """
+    logger.info(f"[PROCESS_RESPONSE] Processing final response")
+
+    updates = {
+        "current_agent": AgentType.RESPONSE,
+        "turn_count": state.turn_count + 1,
+    }
+
+    # Get the last AI message
+    response_content = ""
+    for msg in reversed(state.messages):
+        if isinstance(msg, AIMessage) and msg.content:
+            response_content = msg.content
+            break
+
+    if not response_content:
+        response_content = "I'm here to help. What can I do for you?"
+        updates["messages"] = [AIMessage(content=response_content)]
 
     # Prepend notification message if present
     if state.prepend_message:
-        response = f"{state.prepend_message} {response}"
-        should_add_message = True  # Need to add the updated message
+        response_content = f"{state.prepend_message} {response_content}"
+        updates["prepend_message"] = None
+        # Update the last message with prepended content
+        updates["messages"] = [AIMessage(content=response_content)]
 
-    return {
-        "current_agent": AgentType.RESPONSE,
-        "turn_count": state.turn_count + 1,
-        "prepend_message": None,  # Clear after use
-        "messages": [AIMessage(content=response)] if should_add_message else []
-    }
+    logger.info(f"[PROCESS_RESPONSE] Response: '{response_content[:80]}...'")
 
+    # Apply slot updates from tools
+    from app.schemas.state import BookingSlots
+    from app.schemas.enums import AppointmentType
 
-# ============================================
-# Routing Functions
-# ============================================
+    raw_updates = get_pending_updates(state.session_id)
 
-def route_after_router(state: ConversationState) -> Literal["faq_agent", "booking_agent", "escalation_agent", "respond"]:
-    """Determine next node based on detected intent."""
-    import logging
-    logger = logging.getLogger("app.agents.graph")
+    if raw_updates:
+        logger.info(f"[PROCESS_RESPONSE] Applying slot updates: {raw_updates}")
+        slots = state.booking_slots.model_copy()
 
-    intent = state.detected_intent
+        if "appointment_type" in raw_updates:
+            appt_type = raw_updates["appointment_type"]
+            if appt_type == "service":
+                slots.appointment_type = AppointmentType.SERVICE
+            elif appt_type == "test_drive":
+                slots.appointment_type = AppointmentType.TEST_DRIVE
 
-    # Handle both enum and string values (due to use_enum_values=True in Pydantic config)
-    if hasattr(intent, 'value'):
-        intent_value = intent.value
-    else:
-        intent_value = intent
+        for field in ["service_type", "vehicle_interest", "preferred_date",
+                      "preferred_time", "customer_name", "customer_phone", "customer_email"]:
+            if field in raw_updates:
+                setattr(slots, field, raw_updates[field])
 
-    logger.info(f"[ROUTE] Intent value: '{intent_value}'")
+        updates["booking_slots"] = slots
 
-    if intent_value == "faq":
-        logger.info(f"[ROUTE] -> faq_agent")
-        return "faq_agent"
-    elif intent_value in ["book_service", "book_test_drive", "reschedule", "cancel"]:
-        logger.info(f"[ROUTE] -> booking_agent")
-        return "booking_agent"
-    elif intent_value == "escalation":
-        logger.info(f"[ROUTE] -> escalation_agent")
-        return "escalation_agent"
-    else:
-        logger.info(f"[ROUTE] -> respond (default)")
-        return "respond"
+        # Check for customer identification
+        if raw_updates.get("_customer_identified"):
+            from app.schemas.customer import CustomerContext
+            updates["customer"] = CustomerContext(
+                customer_id=raw_updates.get("_customer_id"),
+                name=raw_updates.get("_customer_name"),
+                phone=raw_updates.get("_customer_phone") or slots.customer_phone,
+                email=raw_updates.get("_customer_email") or slots.customer_email,
+                is_identified=True
+            )
+
+        # Check for confirmed appointment
+        if raw_updates.get("_confirmed_appointment"):
+            from app.schemas.state import ConfirmedAppointment
+            conf_data = raw_updates["_confirmed_appointment"]
+            updates["confirmed_appointment"] = ConfirmedAppointment(
+                appointment_id=conf_data.get("appointment_id"),
+                appointment_type=conf_data.get("appointment_type"),
+                scheduled_date=conf_data.get("scheduled_date"),
+                scheduled_time=conf_data.get("scheduled_time"),
+                customer_name=conf_data.get("customer_name"),
+                service_type=conf_data.get("service_type"),
+                vehicle=conf_data.get("vehicle"),
+                confirmation_email=conf_data.get("customer_email")
+            )
+            logger.info(f"[PROCESS_RESPONSE] Booking confirmed: #{conf_data.get('appointment_id')}")
+
+    return updates
 
 
 # ============================================
@@ -390,46 +370,46 @@ def route_after_router(state: ConversationState) -> Literal["faq_agent", "bookin
 # ============================================
 
 def create_graph():
-    """Create the LangGraph conversation graph."""
+    """
+    Create the LangGraph conversation graph with proper tool-calling pattern.
 
-    # Create graph with state schema
+    Flow:
+    check_notifications -> call_model -> should_continue conditional edge
+                                      |-> tool_node -> call_model (loop)
+                                      |-> process_response -> END
+    """
+
     workflow = StateGraph(ConversationState)
 
     # Add nodes
     workflow.add_node("check_notifications", check_notifications_node)
-    workflow.add_node("router", router_node)
-    workflow.add_node("faq_agent", faq_agent_node)
-    workflow.add_node("booking_agent", booking_agent_node)
-    workflow.add_node("escalation_agent", escalation_agent_node)
-    workflow.add_node("respond", respond_node)
+    workflow.add_node("call_model", call_model_node)
+    workflow.add_node("tool_node", custom_tool_node)
+    workflow.add_node("process_response", process_response_node)
 
     # Set entry point
     workflow.set_entry_point("check_notifications")
 
-    # Add edges
-    workflow.add_edge("check_notifications", "router")
+    # Edges
+    workflow.add_edge("check_notifications", "call_model")
 
-    # Conditional routing after router
+    # Conditional edge after call_model
     workflow.add_conditional_edges(
-        "router",
-        route_after_router,
+        "call_model",
+        should_continue,
         {
-            "faq_agent": "faq_agent",
-            "booking_agent": "booking_agent",
-            "escalation_agent": "escalation_agent",
-            "respond": "respond"
+            "tool_node": "tool_node",
+            "process_response": "process_response"
         }
     )
 
-    # All agents go to respond
-    workflow.add_edge("faq_agent", "respond")
-    workflow.add_edge("booking_agent", "respond")
-    workflow.add_edge("escalation_agent", "respond")
+    # After tools, go back to call_model to process results
+    workflow.add_edge("tool_node", "call_model")
 
-    # End after respond
-    workflow.add_edge("respond", END)
+    # After processing response, end
+    workflow.add_edge("process_response", END)
 
-    # Compile without checkpointer - we manage state externally via Redis
+    # Compile
     graph = workflow.compile()
 
     return graph
@@ -450,26 +430,12 @@ async def process_message(
 ) -> ConversationState:
     """
     Process a user message through the conversation graph.
-
-    Args:
-        session_id: Unique session identifier
-        user_message: The user's message
-        current_state: Current conversation state (optional)
-
-    Returns:
-        Updated conversation state
     """
-    import logging
-    logger = logging.getLogger("app.agents.graph")
-
-    # Initialize state if not provided
     if current_state is None:
         current_state = ConversationState(session_id=session_id)
 
     logger.info(f"[GRAPH] process_message called with {len(current_state.messages)} existing messages")
 
-    # Build input state dict with the new user message
-    # Using add_messages reducer, we pass the new message and it gets merged
     all_messages = current_state.messages + [HumanMessage(content=user_message)]
     logger.info(f"[GRAPH] Total messages for graph: {len(all_messages)}")
 
@@ -482,6 +448,7 @@ async def process_message(
         "customer": current_state.customer,
         "booking_slots": current_state.booking_slots,
         "pending_confirmation": current_state.pending_confirmation,
+        "confirmed_appointment": current_state.confirmed_appointment,
         "pending_tasks": current_state.pending_tasks,
         "notifications_queue": current_state.notifications_queue,
         "escalation_in_progress": current_state.escalation_in_progress,
@@ -495,16 +462,11 @@ async def process_message(
         "last_updated": current_state.last_updated,
     }
 
-    # Run graph (stateless - we manage state externally via Redis)
     try:
         result = await conversation_graph.ainvoke(input_state)
-        # Convert result back to ConversationState
         return ConversationState(**result)
     except Exception as e:
-        # Log error and return state with error message
-        import logging
-        logging.error(f"Graph invocation error: {e}", exc_info=True)
-        # Return state with an error message appended
+        logger.error(f"Graph invocation error: {e}", exc_info=True)
         error_msg = "I apologize, but I encountered an error processing your request. Please try again."
         return ConversationState(
             **{
@@ -515,5 +477,5 @@ async def process_message(
 
 
 def set_escalation_worker(worker):
-    """Set the background worker for escalation agent."""
-    escalation_agent.set_background_worker(worker)
+    """Set the background worker for escalation handling."""
+    unified_agent.set_background_worker(worker)

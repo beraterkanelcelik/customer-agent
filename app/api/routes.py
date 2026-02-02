@@ -11,14 +11,15 @@ from app.config import get_settings
 from app.api.deps import get_database, get_conversation_service
 from app.api.websocket import get_ws_manager
 from app.services.conversation import ConversationService
-from app.database.models import FAQ, Customer, Appointment, ServiceType, Inventory
+from app.database.models import FAQ, Customer, Appointment, ServiceType, Inventory, AvailabilitySlot
 from app.schemas.api import (
     HealthResponse, ChatRequest, ChatResponse,
     CreateSessionRequest, SessionResponse,
     VoiceTokenRequest, VoiceTokenResponse,
     FAQListResponse, FAQEntry,
     CustomerListResponse, AppointmentListResponse,
-    SalesRespondRequest, SalesRespondResponse, SalesTokenRequest
+    SalesRespondRequest, SalesRespondResponse, SalesTokenRequest,
+    AvailabilityResponse, AvailabilityDayResponse, AvailabilitySlotResponse
 )
 from app.schemas.customer import CustomerResponse
 from app.schemas.appointment import AppointmentResponse, ServiceTypeResponse, InventoryVehicleResponse
@@ -59,7 +60,7 @@ async def create_session(
         session_id=session_id,
         created_at=state.created_at,
         turn_count=0,
-        current_agent=get_enum_value(state.current_agent, "router"),
+        current_agent=get_enum_value(state.current_agent, "unified"),
         customer=state.customer if state.customer.is_identified else None,
         is_active=True
     )
@@ -83,7 +84,7 @@ async def get_session(
         session_id=session_id,
         created_at=state.created_at,
         turn_count=state.turn_count,
-        current_agent=get_enum_value(state.current_agent, "router"),
+        current_agent=get_enum_value(state.current_agent, "unified"),
         customer=state.customer if state.customer.is_identified else None,
         is_active=True
     )
@@ -113,6 +114,8 @@ async def chat(
 
     This is the main endpoint for conversation processing.
     """
+    from app.tools.call_tools import get_pending_call_action
+
     ws_manager = get_ws_manager()
 
     # Send user transcript to WebSocket
@@ -135,15 +138,44 @@ async def chat(
         agent_type=response.agent_type
     )
 
-    # Send state update to WebSocket
-    await ws_manager.send_state_update(request.session_id)
+    # Send state update to WebSocket with response data directly (more reliable than re-reading)
+    await ws_manager.send_state_update_direct(
+        session_id=request.session_id,
+        current_agent=response.agent_type,
+        intent=response.intent,
+        confidence=response.confidence,
+        customer=response.customer,
+        booking_slots=response.booking_slots,
+        confirmed_appointment=response.confirmed_appointment,
+        pending_tasks=response.pending_tasks,
+        escalation_in_progress=response.escalation_in_progress,
+        human_agent_status=response.human_agent_status
+    )
+
+    # Check for end_call action
+    call_action = get_pending_call_action(request.session_id)
+    if call_action and call_action.get("action") == "end_call":
+        farewell_message = call_action.get("farewell_message", "Thank you for calling. Goodbye!")
+        await ws_manager.send_end_call(request.session_id, farewell_message)
 
     return response
 
 
 # ============================================
-# Voice Token Endpoint
+# Voice Status & Token Endpoints
 # ============================================
+
+@router.get("/voice/status")
+async def get_voice_status():
+    """
+    Check if voice worker models are loaded and ready.
+
+    Returns status of STT and TTS model loading.
+    """
+    from app.background.state_store import state_store
+    status = await state_store.get_voice_worker_status()
+    return status
+
 
 @router.post("/voice/token", response_model=VoiceTokenResponse)
 async def get_voice_token(request: VoiceTokenRequest):
@@ -353,6 +385,220 @@ async def list_inventory(
     vehicles = result.scalars().all()
 
     return [InventoryVehicleResponse.model_validate(v) for v in vehicles]
+
+
+# ============================================
+# Availability Endpoints
+# ============================================
+
+@router.get("/availability", response_model=AvailabilityResponse)
+async def get_availability(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    appointment_type: Optional[str] = None,
+    inventory_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_database)
+):
+    """
+    Get available appointment slots for calendar display.
+
+    Args:
+        start_date: Start date (YYYY-MM-DD), defaults to today
+        end_date: End date (YYYY-MM-DD), defaults to start_date + 14 days
+        appointment_type: Filter by 'service' or 'test_drive'
+        inventory_id: Filter by specific vehicle (for test drives)
+    """
+    from datetime import date, timedelta
+
+    # Parse dates
+    if start_date:
+        try:
+            start = datetime.strptime(start_date, "%Y-%m-%d").date()
+        except ValueError:
+            start = date.today()
+    else:
+        start = date.today()
+
+    if end_date:
+        try:
+            end = datetime.strptime(end_date, "%Y-%m-%d").date()
+        except ValueError:
+            end = start + timedelta(days=14)
+    else:
+        end = start + timedelta(days=14)
+
+    # Build query
+    stmt = select(AvailabilitySlot).where(
+        AvailabilitySlot.slot_date >= start,
+        AvailabilitySlot.slot_date <= end
+    ).order_by(AvailabilitySlot.slot_date, AvailabilitySlot.slot_time)
+
+    if appointment_type:
+        stmt = stmt.where(AvailabilitySlot.appointment_type == appointment_type)
+
+    if inventory_id:
+        stmt = stmt.where(AvailabilitySlot.inventory_id == inventory_id)
+
+    result = await db.execute(stmt)
+    slots = result.scalars().all()
+
+    # Group by date
+    days_map = {}
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+    for slot in slots:
+        date_str = slot.slot_date.strftime("%Y-%m-%d")
+        if date_str not in days_map:
+            days_map[date_str] = {
+                "date": date_str,
+                "day_name": day_names[slot.slot_date.weekday()],
+                "is_open": slot.slot_date.weekday() != 6,  # Closed on Sunday
+                "slots": []
+            }
+
+        # Build vehicle name if test drive slot has a vehicle
+        vehicle_name = None
+        if slot.inventory_id and slot.vehicle:
+            vehicle = slot.vehicle
+            vehicle_name = f"{vehicle.year} {vehicle.make} {vehicle.model}"
+
+        days_map[date_str]["slots"].append(AvailabilitySlotResponse(
+            id=slot.id,
+            slot_time=slot.slot_time.strftime("%H:%M"),
+            appointment_type=slot.appointment_type,
+            is_available=slot.is_available,
+            inventory_id=slot.inventory_id,
+            vehicle_name=vehicle_name
+        ))
+
+    # Sort days and convert to list
+    days = [
+        AvailabilityDayResponse(**day_data)
+        for date_str, day_data in sorted(days_map.items())
+    ]
+
+    # Count total available
+    total_available = sum(
+        1 for slot in slots if slot.is_available
+    )
+
+    return AvailabilityResponse(
+        start_date=start.strftime("%Y-%m-%d"),
+        end_date=end.strftime("%Y-%m-%d"),
+        days=days,
+        total_available=total_available
+    )
+
+
+@router.post("/availability/generate")
+async def generate_availability_slots(
+    days: int = 30,
+    db: AsyncSession = Depends(get_database)
+):
+    """
+    Generate or regenerate availability slots for the next N days.
+
+    Creates per-vehicle slots for test drives (each vehicle has its own availability).
+    This can be called if slots are missing or need to be refreshed.
+    """
+    from datetime import date, time, timedelta
+
+    today = date.today()
+
+    # Delete existing future slots
+    delete_stmt = AvailabilitySlot.__table__.delete().where(
+        AvailabilitySlot.slot_date >= today
+    )
+    await db.execute(delete_stmt)
+
+    # Get available test drive vehicles (limit to 3 for demo)
+    vehicle_stmt = select(Inventory).where(Inventory.is_available == True).limit(3)
+    result = await db.execute(vehicle_stmt)
+    test_drive_vehicles = result.scalars().all()
+
+    slots_added = 0
+
+    for day_offset in range(days):
+        slot_date = today + timedelta(days=day_offset)
+
+        # Skip Sundays (weekday 6)
+        if slot_date.weekday() == 6:
+            continue
+
+        # Determine end hour (Saturday closes earlier)
+        end_hour = 16 if slot_date.weekday() == 5 else 17
+
+        # Generate slots for each hour
+        for hour in range(9, end_hour):
+            # Skip lunch hour (12-1 PM)
+            if hour == 12:
+                continue
+
+            # Create 30-minute slots
+            for minute in [0, 30]:
+                slot_time = time(hour, minute)
+
+                # Service slots (no vehicle needed)
+                slot = AvailabilitySlot(
+                    slot_date=slot_date,
+                    slot_time=slot_time,
+                    appointment_type="service",
+                    inventory_id=None,
+                    is_available=True
+                )
+                db.add(slot)
+                slots_added += 1
+
+                # Test drive slots - one per vehicle
+                for vehicle in test_drive_vehicles:
+                    slot = AvailabilitySlot(
+                        slot_date=slot_date,
+                        slot_time=slot_time,
+                        appointment_type="test_drive",
+                        inventory_id=vehicle.id,
+                        is_available=True
+                    )
+                    db.add(slot)
+                    slots_added += 1
+
+    await db.commit()
+
+    return {
+        "status": "success",
+        "slots_generated": slots_added,
+        "days": days,
+        "vehicles_for_test_drives": len(test_drive_vehicles),
+        "start_date": today.strftime("%Y-%m-%d"),
+        "end_date": (today + timedelta(days=days-1)).strftime("%Y-%m-%d")
+    }
+
+
+@router.get("/availability/vehicles")
+async def get_test_drive_vehicles(db: AsyncSession = Depends(get_database)):
+    """
+    Get list of vehicles available for test drives.
+
+    Returns vehicles that have availability slots (limited to 3 for demo).
+    """
+    stmt = select(Inventory).where(Inventory.is_available == True).limit(3)
+    result = await db.execute(stmt)
+    vehicles = result.scalars().all()
+
+    return {
+        "vehicles": [
+            {
+                "id": v.id,
+                "name": f"{v.year} {v.make} {v.model}",
+                "make": v.make,
+                "model": v.model,
+                "year": v.year,
+                "color": v.color,
+                "price": v.price,
+                "stock_number": v.stock_number
+            }
+            for v in vehicles
+        ]
+    }
 
 
 # ============================================

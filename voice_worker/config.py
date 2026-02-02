@@ -21,18 +21,9 @@ class VoiceSettings(BaseSettings):
     whisper_model: str = Field(default="medium")  # medium with INT8 for best accuracy
     whisper_device: str = Field(default="cuda")  # Use GPU for faster transcription
 
-    # TTS Backend: "kokoro" (local, GPU), "piper" (local, CPU), or "edge" (cloud)
-    tts_backend: str = Field(default="kokoro")
-
     # Kokoro TTS (local, GPU-accelerated, high quality, low VRAM)
     kokoro_voice: str = Field(default="af_heart")  # Warm, friendly female voice
     kokoro_lang_code: str = Field(default="a")  # 'a' = American English, 'b' = British
-
-    # Piper TTS (local, CPU-based)
-    piper_voice: str = Field(default="en_US-lessac-high")  # High quality voice
-
-    # Edge TTS (cloud - Microsoft's free neural TTS)
-    edge_tts_voice: str = Field(default="en-US-JennyNeural")  # Natural, friendly voice
 
     # Paths
     models_path: str = Field(default="/app/models")

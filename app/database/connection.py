@@ -132,3 +132,87 @@ def init_db():
 
         session.commit()
         print("Database seeded successfully!")
+
+    # Generate availability slots
+    _generate_availability_slots(sync_engine)
+
+
+def _generate_availability_slots(engine, days: int = 30):
+    """
+    Generate availability slots for the next N days.
+
+    Creates slots for both service and test_drive appointments.
+    - Service: One slot per time (any service bay)
+    - Test Drive: One slot PER VEHICLE per time (each car has its own availability)
+
+    Business hours: 9 AM - 5 PM weekdays, 9 AM - 4 PM Saturday
+    Excludes: Sundays, lunch hour (12-1 PM)
+    """
+    from datetime import date, time, timedelta
+    from sqlalchemy.orm import Session
+    from .models import AvailabilitySlot, Inventory
+
+    today = date.today()
+
+    with Session(engine) as session:
+        # Check if slots already exist for today
+        existing = session.query(AvailabilitySlot).filter(
+            AvailabilitySlot.slot_date >= today
+        ).count()
+
+        if existing > 0:
+            print(f"Availability slots already exist ({existing} slots). Skipping generation.")
+            return
+
+        # Get available test drive vehicles (limit to 3 for demo)
+        test_drive_vehicles = session.query(Inventory).filter(
+            Inventory.is_available == True
+        ).limit(3).all()
+
+        print(f"Found {len(test_drive_vehicles)} vehicles for test drive slots")
+
+        slots_to_add = []
+
+        for day_offset in range(days):
+            slot_date = today + timedelta(days=day_offset)
+
+            # Skip Sundays (weekday 6)
+            if slot_date.weekday() == 6:
+                continue
+
+            # Determine end hour (Saturday closes earlier)
+            end_hour = 16 if slot_date.weekday() == 5 else 17
+
+            # Generate slots for each hour
+            for hour in range(9, end_hour):
+                # Skip lunch hour (12-1 PM)
+                if hour == 12:
+                    continue
+
+                # Create 30-minute slots
+                for minute in [0, 30]:
+                    slot_time = time(hour, minute)
+
+                    # Service slots (no vehicle needed)
+                    slots_to_add.append(AvailabilitySlot(
+                        slot_date=slot_date,
+                        slot_time=slot_time,
+                        appointment_type="service",
+                        inventory_id=None,
+                        is_available=True
+                    ))
+
+                    # Test drive slots - one per vehicle
+                    for vehicle in test_drive_vehicles:
+                        slots_to_add.append(AvailabilitySlot(
+                            slot_date=slot_date,
+                            slot_time=slot_time,
+                            appointment_type="test_drive",
+                            inventory_id=vehicle.id,
+                            is_available=True
+                        ))
+
+        if slots_to_add:
+            session.add_all(slots_to_add)
+            session.commit()
+            print(f"Generated {len(slots_to_add)} availability slots for the next {days} days.")

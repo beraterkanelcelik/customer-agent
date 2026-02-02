@@ -11,11 +11,8 @@ from .stt import stt
 
 settings = get_voice_settings()
 
-# Import TTS based on config
-if settings.tts_backend == "edge":
-    from .tts_edge import edge_tts_instance as tts
-else:
-    from .tts import tts
+# Kokoro TTS
+from .tts_kokoro import kokoro_tts_instance as tts
 
 # Configure logging
 logging.basicConfig(
@@ -92,22 +89,43 @@ async def entrypoint(ctx: JobContext):
         logger.info("Agent job completed")
 
 
+def update_status_in_redis(status: dict):
+    """Update voice worker status in Redis."""
+    import redis
+    try:
+        r = redis.from_url(settings.redis_url)
+        import json
+        r.set("voice_worker:status", json.dumps(status), ex=300)
+        r.close()
+    except Exception as e:
+        logger.warning(f"Failed to update Redis status: {e}")
+
+
 def preload_models():
     """Preload ML models at startup for faster first response."""
     logger.info("Preloading models...")
 
+    status = {"ready": False, "stt_loaded": False, "tts_loaded": False}
+    update_status_in_redis(status)
+
     try:
         stt.load_model()
+        status["stt_loaded"] = True
+        update_status_in_redis(status)
         logger.info("STT model loaded")
     except Exception as e:
         logger.error(f"Failed to load STT model: {e}")
 
     try:
         tts.load_model()
+        status["tts_loaded"] = True
+        update_status_in_redis(status)
         logger.info("TTS model loaded")
     except Exception as e:
         logger.error(f"Failed to load TTS model: {e}")
 
+    status["ready"] = status["stt_loaded"] and status["tts_loaded"]
+    update_status_in_redis(status)
     logger.info("Model preloading complete")
 
 
@@ -116,11 +134,7 @@ if __name__ == "__main__":
     logger.info(f"LiveKit URL: {settings.livekit_url}")
     logger.info(f"App API URL: {settings.app_api_url}")
     logger.info(f"Whisper model: {settings.whisper_model} (device: {settings.whisper_device})")
-    logger.info(f"TTS backend: {settings.tts_backend}")
-    if settings.tts_backend == "edge":
-        logger.info(f"Edge TTS voice: {settings.edge_tts_voice}")
-    else:
-        logger.info(f"Piper voice: {settings.piper_voice}")
+    logger.info(f"Kokoro TTS voice: {settings.kokoro_voice}")
 
     # Preload models
     preload_models()

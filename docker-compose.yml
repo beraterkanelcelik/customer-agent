@@ -56,6 +56,7 @@ services:
       - "8000:8000"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1-mini}
       - LIVEKIT_URL=ws://livekit:7880
       - LIVEKIT_API_KEY=devkey
       - LIVEKIT_API_SECRET=secret
@@ -95,13 +96,6 @@ services:
       - LIVEKIT_API_SECRET=secret
       - APP_API_URL=http://app:8000
       - REDIS_URL=redis://redis:6379/0
-      # STT Settings
-      - WHISPER_MODEL=${WHISPER_MODEL:-medium}
-      - WHISPER_DEVICE=${WHISPER_DEVICE:-cuda}
-      # TTS Settings (options: piper, edge)
-      - TTS_BACKEND=${TTS_BACKEND:-piper}
-      - PIPER_VOICE=${PIPER_VOICE:-en_US-lessac-high}
-      - EDGE_TTS_VOICE=${EDGE_TTS_VOICE:-en-US-JennyNeural}
     volumes:
       - ./models:/app/models
     # GPU Support - requires NVIDIA Container Toolkit

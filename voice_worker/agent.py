@@ -14,14 +14,9 @@ from livekit import rtc
 from .stt import stt
 from .config import get_voice_settings
 
-# Import TTS based on config
+# Kokoro TTS
 settings = get_voice_settings()
-if settings.tts_backend == "kokoro":
-    from .tts_kokoro import kokoro_tts_instance as tts
-elif settings.tts_backend == "edge":
-    from .tts_edge import edge_tts_instance as tts
-else:
-    from .tts import tts
+from .tts_kokoro import kokoro_tts_instance as tts
 
 logger = logging.getLogger("voice_worker.agent")
 
@@ -189,6 +184,39 @@ class DealershipVoiceAgent:
                                     logger.info(f"Received notification: {notification_msg[:50]}...")
                                     # Speak the notification to the user
                                     await self.speak(notification_msg)
+
+                            # Handle end call signal
+                            elif data.get("type") == "end_call":
+                                farewell = data.get("farewell_message", "Thank you for calling. Goodbye!")
+                                logger.info(f"Received end_call signal: {farewell[:50]}...")
+
+                                # Wait for any current speech to finish first
+                                if self.is_speaking:
+                                    logger.info("Waiting for current speech to finish before farewell...")
+                                    for _ in range(200):  # Wait up to 4 seconds
+                                        if not self.is_speaking:
+                                            break
+                                        await asyncio.sleep(0.02)
+
+                                # Speak the farewell message (agent response should be empty/minimal)
+                                if farewell and farewell.strip():
+                                    logger.info("Speaking farewell message before disconnecting...")
+                                    await self.speak(farewell)
+
+                                    # Wait for farewell to finish
+                                    if self.is_speaking:
+                                        for _ in range(300):  # Wait up to 6 seconds for farewell
+                                            if not self.is_speaking:
+                                                break
+                                            await asyncio.sleep(0.02)
+
+                                # Small delay to ensure audio is fully delivered
+                                await asyncio.sleep(0.5)
+
+                                # Signal to stop the agent
+                                self._running = False
+                                logger.info("Call ended by agent request")
+                                break
 
                             # Handle heartbeat
                             elif data.get("type") == "heartbeat":
@@ -396,26 +424,44 @@ class DealershipVoiceAgent:
             return
 
         # Filter out Whisper hallucinations (common patterns when audio is unclear)
-        hallucination_patterns = [
-            "you may as well",
+        # Only filter EXACT matches for short text, use substring match for longer phrases
+        exact_hallucinations = {
+            # Single words/sounds that are pure noise
+            "...", "___", "you", "the", "a", "i",
+            # Foreign language artifacts (often appear in noisy audio)
+            "字幕", "視聴", "請訂閱", "谢谢",
+        }
+
+        phrase_hallucinations = [
+            # Multi-word Whisper hallucinations
             "thank you for watching",
             "please subscribe",
             "thanks for watching",
             "see you next time",
             "music playing",
             "[music]",
-            "...",
-            "___",
+            "[silence]",
+            "[applause]",
+            "[laughter]",
+            "you may as well",
         ]
+
         text_lower = text.lower().strip()
-        if any(pattern in text_lower for pattern in hallucination_patterns) or len(text_lower) < 3:
-            logger.warning(f"Detected likely hallucination, ignoring: '{text}'")
+
+        # Check exact match hallucinations (only for very short text)
+        if text_lower in exact_hallucinations:
+            logger.warning(f"Detected hallucination (exact match), ignoring: '{text}'")
             return
 
-        # Also filter if text is mostly underscores or punctuation
-        alpha_count = sum(1 for c in text if c.isalpha())
-        if alpha_count < 3:
-            logger.warning(f"Text has too few letters ({alpha_count}), ignoring: '{text}'")
+        # Check phrase hallucinations (substring match)
+        if any(pattern in text_lower for pattern in phrase_hallucinations):
+            logger.warning(f"Detected hallucination (phrase match), ignoring: '{text}'")
+            return
+
+        # Filter if text is ONLY punctuation/symbols (no letters or numbers at all)
+        alphanumeric_count = sum(1 for c in text if c.isalnum())
+        if alphanumeric_count == 0:
+            logger.warning(f"Text has no alphanumeric characters, ignoring: '{text}'")
             return
 
         logger.info(f"User said: {text} [STT: {latency['stt_ms']}ms]")

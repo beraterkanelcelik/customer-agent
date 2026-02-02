@@ -33,6 +33,18 @@ def deserialize_messages(messages: List[Any]) -> List[BaseMessage]:
     return result
 
 
+class ConfirmedAppointment(BaseModel):
+    """Represents a confirmed appointment for display in the frontend."""
+    appointment_id: int
+    appointment_type: str
+    scheduled_date: str
+    scheduled_time: str
+    customer_name: str
+    service_type: Optional[str] = None
+    vehicle: Optional[str] = None
+    confirmation_email: Optional[str] = None
+
+
 class BookingSlots(BaseModel):
     """Slots being collected for booking."""
     appointment_type: Optional[AppointmentType] = None
@@ -52,28 +64,14 @@ class BookingSlots(BaseModel):
     customer_vehicle_year: Optional[int] = None
 
     def get_missing_slots(self, is_new_customer: bool = True) -> List[str]:
-        """Get list of missing required slots."""
+        """Get list of missing required slots.
+
+        IMPORTANT: Customer info is collected FIRST before any booking details.
+        This ensures we have contact info before proceeding with appointment details.
+        """
         missing = []
 
-        if self.appointment_type is None:
-            missing.append("appointment_type")
-            return missing  # Can't determine other requirements yet
-
-        # Handle both enum and string values
-        appt_type = self.appointment_type.value if hasattr(self.appointment_type, 'value') else self.appointment_type
-
-        if appt_type == "service":
-            if not self.service_type:
-                missing.append("service_type")
-        elif appt_type == "test_drive":
-            if not self.vehicle_interest:
-                missing.append("vehicle_interest")
-
-        if not self.preferred_date:
-            missing.append("preferred_date")
-        if not self.preferred_time:
-            missing.append("preferred_time")
-
+        # Step 1: Customer info FIRST (blocking) - must have all before proceeding
         if is_new_customer:
             if not self.customer_name:
                 missing.append("customer_name")
@@ -81,6 +79,30 @@ class BookingSlots(BaseModel):
                 missing.append("customer_phone")
             if not self.customer_email:
                 missing.append("customer_email")
+            # Block until customer info is complete
+            if missing:
+                return missing
+
+        # Step 2: Appointment type
+        if self.appointment_type is None:
+            return ["appointment_type"]
+
+        # Handle both enum and string values
+        appt_type = self.appointment_type.value if hasattr(self.appointment_type, 'value') else self.appointment_type
+
+        # Step 3: Details based on type
+        if appt_type == "service":
+            if not self.service_type:
+                return ["service_type"]
+        elif appt_type == "test_drive":
+            if not self.vehicle_interest:
+                return ["vehicle_interest"]
+
+        # Step 4: Date/time
+        if not self.preferred_date:
+            return ["preferred_date"]
+        if not self.preferred_time:
+            return ["preferred_time"]
 
         return missing
 
@@ -129,7 +151,7 @@ class ConversationState(BaseModel):
         return v
 
     # Current processing
-    current_agent: AgentType = AgentType.ROUTER
+    current_agent: AgentType = AgentType.UNIFIED
     detected_intent: Optional[IntentType] = None
     confidence: float = 0.0
 
@@ -139,6 +161,7 @@ class ConversationState(BaseModel):
     # Booking
     booking_slots: BookingSlots = Field(default_factory=BookingSlots)
     pending_confirmation: Optional[Dict[str, Any]] = None
+    confirmed_appointment: Optional[ConfirmedAppointment] = None
 
     # Background tasks
     pending_tasks: List[BackgroundTask] = Field(default_factory=list)

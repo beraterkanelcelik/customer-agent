@@ -100,11 +100,16 @@ class ConversationService:
         if hasattr(agent_type, 'value'):
             agent_type = agent_type.value
         elif not agent_type:
-            agent_type = "router"
+            agent_type = "unified"
 
         intent = updated_state.detected_intent
         if hasattr(intent, 'value'):
             intent = intent.value
+
+        # Handle human_agent_status enum
+        human_agent_status = updated_state.human_agent_status
+        if hasattr(human_agent_status, 'value'):
+            human_agent_status = human_agent_status.value
 
         return ChatResponse(
             session_id=session_id,
@@ -114,7 +119,10 @@ class ConversationService:
             confidence=updated_state.confidence,
             customer=updated_state.customer,
             booking_slots=updated_state.booking_slots.model_dump() if updated_state.booking_slots else None,
-            pending_tasks=updated_state.pending_tasks
+            confirmed_appointment=updated_state.confirmed_appointment.model_dump() if updated_state.confirmed_appointment else None,
+            pending_tasks=updated_state.pending_tasks,
+            escalation_in_progress=updated_state.escalation_in_progress,
+            human_agent_status=human_agent_status
         )
 
     async def end_session(self, session_id: str):

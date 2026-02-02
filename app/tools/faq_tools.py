@@ -1,32 +1,26 @@
 from langchain_core.tools import tool
-from typing import Optional
+from pydantic import BaseModel, Field
+from typing import Optional, Literal
 from sqlalchemy import select, or_
 
 from app.database.connection import get_db_context
 from app.database.models import FAQ, ServiceType
 
 
-@tool
+class SearchFAQInput(BaseModel):
+    """Input schema for search_faq tool."""
+    query: str = Field(description="The user's question or key search terms")
+    category: Optional[Literal["hours", "location", "financing", "services", "general"]] = Field(
+        None, description="Optional category filter"
+    )
+
+
+@tool(args_schema=SearchFAQInput)
 async def search_faq(
     query: str,
     category: Optional[str] = None
 ) -> str:
-    """
-    Search the FAQ database for relevant answers.
-
-    Use this tool when the user asks questions about:
-    - Opening hours and location
-    - Financing options and requirements
-    - Available services and pricing
-    - Policies (returns, warranties, loaners)
-
-    Args:
-        query: The user's question or key terms
-        category: Optional filter - hours, location, financing, services, general
-
-    Returns:
-        The most relevant answer or indication that info wasn't found.
-    """
+    """Search the FAQ database for answers about hours, location, financing, services, or policies."""
     async with get_db_context() as session:
         stmt = select(FAQ)
 
@@ -60,15 +54,7 @@ async def search_faq(
 
 @tool
 async def list_services() -> str:
-    """
-    List all available services with estimated pricing.
-
-    Use this when customer asks what services are available,
-    wants to know pricing, or is deciding what service to book.
-
-    Returns:
-        Formatted list of all services with duration and price.
-    """
+    """List all available services with pricing and duration. Use when customer asks about services or pricing."""
     async with get_db_context() as session:
         result = await session.execute(select(ServiceType))
         services = result.scalars().all()

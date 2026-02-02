@@ -348,6 +348,23 @@ class StateStore:
             async with self._get_lock(session_id):
                 self._memory_store.pop(session_id, None)
 
+    async def get_voice_worker_status(self) -> dict:
+        """Get voice worker model loading status."""
+        if self._use_redis:
+            data = await self._redis.get("voice_worker:status")
+            if data:
+                return json.loads(data)
+        return {"ready": False, "stt_loaded": False, "tts_loaded": False}
+
+    async def set_voice_worker_status(self, status: dict):
+        """Set voice worker model loading status."""
+        if self._use_redis:
+            await self._redis.set(
+                "voice_worker:status",
+                json.dumps(status),
+                ex=300  # 5 minute expiry - worker should refresh
+            )
+
 
 # Global instance
 state_store = StateStore()

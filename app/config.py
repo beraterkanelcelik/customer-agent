@@ -8,7 +8,7 @@ class Settings(BaseSettings):
 
     # OpenAI
     openai_api_key: str = Field(..., validation_alias="OPENAI_API_KEY")
-    openai_model: str = Field(default="gpt-4o-mini")  # Fast model for real-time voice
+    openai_model: str = Field(default="gpt-4.1-mini", validation_alias="OPENAI_MODEL")
 
     # LiveKit
     livekit_url: str = Field(default="ws://localhost:7880")

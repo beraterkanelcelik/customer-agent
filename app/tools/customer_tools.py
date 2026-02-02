@@ -1,4 +1,5 @@
 from langchain_core.tools import tool
+from pydantic import BaseModel, Field
 from typing import Optional
 from sqlalchemy import select
 
@@ -6,20 +7,24 @@ from app.database.connection import get_db_context
 from app.database.models import Customer, Vehicle
 
 
-@tool
+class GetCustomerInput(BaseModel):
+    """Input schema for get_customer tool."""
+    phone: str = Field(description="Customer's phone number (digits only preferred, e.g., '5551234567')")
+
+
+class CreateCustomerInput(BaseModel):
+    """Input schema for create_customer tool."""
+    name: str = Field(description="Customer's full name")
+    phone: str = Field(description="Customer's phone number (digits only)")
+    email: str = Field(description="Customer's email address")
+    vehicle_make: Optional[str] = Field(None, description="Vehicle manufacturer (e.g., 'Toyota')")
+    vehicle_model: Optional[str] = Field(None, description="Vehicle model (e.g., 'Camry')")
+    vehicle_year: Optional[int] = Field(None, description="Vehicle year (e.g., 2022)")
+
+
+@tool(args_schema=GetCustomerInput)
 async def get_customer(phone: str) -> str:
-    """
-    Look up a customer by phone number.
-
-    Use this to identify returning customers at the start of booking
-    or when customer provides their phone number.
-
-    Args:
-        phone: Customer's phone number (any format accepted)
-
-    Returns:
-        Customer info if found, or indication of new customer.
-    """
+    """Look up a customer by phone number. Use to identify returning customers."""
     # Normalize phone - extract digits
     digits = ''.join(filter(str.isdigit, phone))
 
@@ -57,8 +62,20 @@ async def get_customer(phone: str) -> str:
         return response
 
 
-@tool
+class CreateCustomerInputWithSession(BaseModel):
+    """Input schema for create_customer tool with session_id."""
+    session_id: str = Field(description="The current session ID (required)")
+    name: str = Field(description="Customer's full name")
+    phone: str = Field(description="Customer's phone number (digits only)")
+    email: str = Field(description="Customer's email address")
+    vehicle_make: Optional[str] = Field(None, description="Vehicle manufacturer (e.g., 'Toyota')")
+    vehicle_model: Optional[str] = Field(None, description="Vehicle model (e.g., 'Camry')")
+    vehicle_year: Optional[int] = Field(None, description="Vehicle year (e.g., 2022)")
+
+
+@tool(args_schema=CreateCustomerInputWithSession)
 async def create_customer(
+    session_id: str,
     name: str,
     phone: str,
     email: str,
@@ -66,22 +83,9 @@ async def create_customer(
     vehicle_model: Optional[str] = None,
     vehicle_year: Optional[int] = None
 ) -> str:
-    """
-    Create a new customer record in the database.
+    """Create a new customer record. Use after collecting name, phone, and email from a new customer."""
+    from app.tools.slot_tools import _pending_slot_updates
 
-    Use this after collecting all required information from a new customer.
-
-    Args:
-        name: Customer's full name
-        phone: Customer's phone number
-        email: Customer's email address
-        vehicle_make: Optional vehicle make (e.g., "Toyota")
-        vehicle_model: Optional vehicle model (e.g., "Camry")
-        vehicle_year: Optional vehicle year (e.g., 2022)
-
-    Returns:
-        Confirmation with new customer ID.
-    """
     async with get_db_context() as session:
         # Check for existing customer
         stmt = select(Customer).where(Customer.phone == phone)
@@ -89,7 +93,19 @@ async def create_customer(
         existing = result.scalar_one_or_none()
 
         if existing:
-            return f"ALREADY_EXISTS: Customer already exists with ID {existing.id}. Use their existing record."
+            # Auto-set customer as identified
+            if session_id not in _pending_slot_updates:
+                _pending_slot_updates[session_id] = {}
+            _pending_slot_updates[session_id]["_customer_identified"] = True
+            _pending_slot_updates[session_id]["_customer_id"] = existing.id
+            _pending_slot_updates[session_id]["_customer_name"] = existing.name
+            _pending_slot_updates[session_id]["_customer_phone"] = existing.phone
+            _pending_slot_updates[session_id]["_customer_email"] = existing.email
+            # Also update the booking slots with customer info
+            _pending_slot_updates[session_id]["customer_name"] = existing.name
+            _pending_slot_updates[session_id]["customer_phone"] = existing.phone
+            _pending_slot_updates[session_id]["customer_email"] = existing.email
+            return f"ALREADY_EXISTS: Customer already exists with ID {existing.id}. Using their existing record. Customer is now identified."
 
         # Create customer
         customer = Customer(
@@ -115,11 +131,25 @@ async def create_customer(
 
         await session.commit()
 
+        # Auto-set customer as identified in pending slot updates
+        if session_id not in _pending_slot_updates:
+            _pending_slot_updates[session_id] = {}
+        _pending_slot_updates[session_id]["_customer_identified"] = True
+        _pending_slot_updates[session_id]["_customer_id"] = customer.id
+        _pending_slot_updates[session_id]["_customer_name"] = name
+        _pending_slot_updates[session_id]["_customer_phone"] = phone
+        _pending_slot_updates[session_id]["_customer_email"] = email
+        # Also update the booking slots with customer info
+        _pending_slot_updates[session_id]["customer_name"] = name
+        _pending_slot_updates[session_id]["customer_phone"] = phone
+        _pending_slot_updates[session_id]["customer_email"] = email
+
         response = f"CUSTOMER_CREATED:\n"
         response += f"Customer ID: {customer.id}\n"
         response += f"Name: {name}\n"
         response += f"Phone: {phone}\n"
         response += f"Email: {email}\n"
+        response += f"Customer is now identified and ready for booking.\n"
 
         if vehicle_id:
             response += f"Vehicle ID: {vehicle_id} ({vehicle_year or ''} {vehicle_make} {vehicle_model})\n"

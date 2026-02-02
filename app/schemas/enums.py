@@ -2,13 +2,9 @@ from enum import Enum
 
 
 class AgentType(str, Enum):
-    """Agent types in the multi-agent system."""
-    ROUTER = "router"
-    FAQ = "faq"
-    BOOKING = "booking"
-    ESCALATION = "escalation"
-    SLOT_FILLER = "slot_filler"
-    RESPONSE = "response"
+    """Agent types in the system."""
+    UNIFIED = "unified"     # Main agent handling all interactions
+    RESPONSE = "response"   # Final response state (for compatibility)
 
 
 class IntentType(str, Enum):

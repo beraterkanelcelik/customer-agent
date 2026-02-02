@@ -202,7 +202,49 @@ class ConnectionManager:
             human_agent_status=human_agent_status,
             customer=state.customer if state.customer and state.customer.is_identified else None,
             booking_slots=state.booking_slots.model_dump() if state.booking_slots else None,
+            confirmed_appointment=state.confirmed_appointment.model_dump() if state.confirmed_appointment else None,
             pending_tasks=state.pending_tasks
+        )
+
+        await self.broadcast(session_id, update.model_dump())
+
+    async def send_state_update_direct(
+        self,
+        session_id: str,
+        current_agent: str = None,
+        intent: str = None,
+        confidence: float = 0,
+        customer = None,
+        booking_slots: dict = None,
+        confirmed_appointment: dict = None,
+        pending_tasks: list = None,
+        escalation_in_progress: bool = False,
+        human_agent_status: str = None
+    ):
+        """
+        Send state update directly from response data without re-reading from store.
+        This ensures real-time updates are immediate and accurate.
+        """
+        # Handle customer - check if it's identified
+        customer_data = None
+        if customer:
+            if hasattr(customer, 'is_identified'):
+                if customer.is_identified:
+                    customer_data = customer.model_dump() if hasattr(customer, 'model_dump') else customer
+            elif isinstance(customer, dict) and customer.get('is_identified'):
+                customer_data = customer
+
+        update = WSStateUpdate(
+            session_id=session_id,
+            current_agent=current_agent or "unified",
+            intent=intent,
+            confidence=confidence,
+            escalation_in_progress=escalation_in_progress,
+            human_agent_status=human_agent_status,
+            customer=customer_data,
+            booking_slots=booking_slots,
+            confirmed_appointment=confirmed_appointment,
+            pending_tasks=pending_tasks or []
         )
 
         await self.broadcast(session_id, update.model_dump())
@@ -220,6 +262,33 @@ class ConnectionManager:
     async def send_message(self, session_id: str, message: dict):
         """Send an arbitrary message to the session."""
         await self.broadcast(session_id, message)
+
+    async def send_end_call(self, session_id: str, farewell_message: str):
+        """Send end call signal to voice worker."""
+        await self.broadcast(session_id, {
+            "type": "end_call",
+            "farewell_message": farewell_message
+        })
+
+    async def broadcast_availability_update(self, slot_date: str, slot_time: str, appointment_type: str, is_available: bool):
+        """
+        Broadcast availability update to all connected sessions.
+
+        This is called when a slot is booked or cancelled.
+        """
+        message = {
+            "type": "availability_update",
+            "slot_date": slot_date,
+            "slot_time": slot_time,
+            "appointment_type": appointment_type,
+            "is_available": is_available
+        }
+        # Broadcast to all sessions
+        async with self._lock:
+            all_sessions = list(self.connections.keys())
+
+        for session_id in all_sessions:
+            await self.broadcast(session_id, message)
 
 
 # Global connection manager

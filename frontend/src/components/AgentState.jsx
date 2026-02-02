@@ -1,13 +1,5 @@
 import React from 'react'
-import { Brain, ArrowRight, UserCheck, Clock, XCircle } from 'lucide-react'
-
-const AGENTS = {
-  router: { name: 'Router', icon: '&#128256;', color: 'bg-purple-500' },
-  faq: { name: 'FAQ', icon: '&#128218;', color: 'bg-blue-500' },
-  booking: { name: 'Booking', icon: '&#128197;', color: 'bg-green-500' },
-  escalation: { name: 'Escalation', icon: '&#128100;', color: 'bg-orange-500' },
-  response: { name: 'Response', icon: '&#128172;', color: 'bg-teal-500' }
-}
+import { Brain, UserCheck, Clock, XCircle, Bot } from 'lucide-react'
 
 const HUMAN_STATUS_CONFIG = {
   checking: {
@@ -49,69 +41,66 @@ const INTENTS = {
 }
 
 export default function AgentState({ state }) {
-  const currentAgent = AGENTS[state.currentAgent] || AGENTS.router
-
   return (
-    <div className="bg-gray-900 rounded-xl overflow-hidden">
+    <div className="bg-gray-900/50 backdrop-blur border border-gray-800/50 rounded-2xl overflow-hidden shadow-xl">
       {/* Header */}
-      <div className="px-4 py-3 bg-gray-800 border-b border-gray-700 flex items-center gap-2">
-        <Brain size={18} className="text-purple-400" />
-        <h2 className="font-semibold">Agent State</h2>
+      <div className="px-5 py-4 bg-gradient-to-r from-gray-800/50 to-gray-800/30 border-b border-gray-700/50 flex items-center gap-2">
+        <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-lg flex items-center justify-center shadow-lg shadow-purple-500/20">
+          <Brain size={16} className="text-white" />
+        </div>
+        <h2 className="font-semibold text-white">Agent State</h2>
       </div>
 
-      <div className="p-4 space-y-4">
-        {/* Agent Pipeline */}
-        <div className="flex items-center justify-between overflow-x-auto pb-2">
-          {Object.entries(AGENTS).map(([key, agent], i) => (
-            <React.Fragment key={key}>
-              <div className={`flex flex-col items-center transition-all ${
-                state.currentAgent === key ? 'scale-110' : 'opacity-40'
-              }`}>
-                <div className={`w-10 h-10 rounded-lg ${agent.color} flex items-center justify-center ${
-                  state.currentAgent === key ? 'ring-2 ring-white' : ''
-                }`}>
-                  <span dangerouslySetInnerHTML={{ __html: agent.icon }} />
-                </div>
-                <span className="text-xs mt-1">{agent.name}</span>
-              </div>
-              {i < Object.keys(AGENTS).length - 1 && (
-                <ArrowRight size={14} className="text-gray-600 flex-shrink-0" />
-              )}
-            </React.Fragment>
-          ))}
-        </div>
-
-        {/* Intent */}
-        <div className="bg-gray-800 rounded-lg p-3">
-          <div className="text-xs text-gray-400 mb-1">Detected Intent</div>
-          <div className="flex items-center gap-2">
-            {state.intent ? (
-              <>
-                <span className="px-2 py-1 bg-indigo-600 rounded text-xs font-medium uppercase">
-                  {state.intent}
-                </span>
-                <span className="text-sm text-gray-300">
-                  {INTENTS[state.intent] || state.intent}
-                </span>
-              </>
-            ) : (
-              <span className="text-gray-500 text-sm">Waiting for input...</span>
-            )}
+      <div className="p-5 space-y-4">
+        {/* Unified Agent Status */}
+        <div className="flex items-center gap-3 p-4 bg-gradient-to-r from-purple-900/20 to-blue-900/20 rounded-xl border border-purple-700/30 shadow-inner">
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center shadow-lg shadow-purple-500/30">
+            <Bot size={24} className="text-white" />
+          </div>
+          <div>
+            <div className="font-medium text-white">Unified Agent</div>
+            <div className="text-xs text-gray-400">Handles FAQ, Booking, Escalation</div>
+          </div>
+          <div className="ml-auto">
+            <div className="w-3 h-3 rounded-full bg-green-400 animate-pulse shadow-lg shadow-green-400/50" />
           </div>
         </div>
 
-        {/* Confidence */}
+        {/* Current Activity */}
+        {state.intent && (
+          <div className="bg-gray-800/50 rounded-xl p-4">
+            <div className="text-xs text-gray-400 mb-2 uppercase tracking-wide">Current Activity</div>
+            <div className="flex items-center gap-2">
+              <span className="px-3 py-1.5 bg-gradient-to-r from-indigo-600 to-purple-600 rounded-lg text-xs font-medium uppercase shadow-lg shadow-indigo-500/20">
+                {state.intent}
+              </span>
+              <span className="text-sm text-gray-300">
+                {INTENTS[state.intent] || state.intent}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Confidence (if available) */}
         {state.confidence > 0 && (
-          <div className="bg-gray-800 rounded-lg p-3">
-            <div className="text-xs text-gray-400 mb-2">Confidence</div>
+          <div className="bg-gray-800/50 rounded-xl p-4">
+            <div className="text-xs text-gray-400 mb-3 uppercase tracking-wide">Intent Confidence</div>
             <div className="flex items-center gap-3">
-              <div className="flex-1 h-2 bg-gray-700 rounded-full overflow-hidden">
+              <div className="flex-1 h-2.5 bg-gray-700 rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-indigo-500 rounded-full transition-all"
+                  className={`h-full rounded-full transition-all duration-500 ${
+                    state.confidence >= 0.8 ? 'bg-gradient-to-r from-green-500 to-emerald-500' :
+                    state.confidence >= 0.6 ? 'bg-gradient-to-r from-indigo-500 to-purple-500' :
+                    'bg-gradient-to-r from-yellow-500 to-orange-500'
+                  }`}
                   style={{ width: `${state.confidence * 100}%` }}
                 />
               </div>
-              <span className="text-sm font-medium">
+              <span className={`text-sm font-bold ${
+                state.confidence >= 0.8 ? 'text-green-400' :
+                state.confidence >= 0.6 ? 'text-indigo-400' :
+                'text-yellow-400'
+              }`}>
                 {Math.round(state.confidence * 100)}%
               </span>
             </div>
@@ -127,8 +116,9 @@ export default function AgentState({ state }) {
   )
 }
 
+// Updated human status config with better colors
+
 function EscalationStatus({ status }) {
-  // Default to 'checking' if escalation is in progress but no status yet
   const statusKey = status || 'checking'
   const config = HUMAN_STATUS_CONFIG[statusKey] || HUMAN_STATUS_CONFIG.checking
   const IconComponent = config.icon

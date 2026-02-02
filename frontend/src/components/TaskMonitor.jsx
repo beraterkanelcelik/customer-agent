@@ -2,10 +2,10 @@ import React from 'react'
 import { Zap, Check, Loader2, XCircle } from 'lucide-react'
 
 const STATUS_CONFIG = {
-  pending: { icon: Loader2, color: 'text-yellow-400', bg: 'bg-yellow-900/30' },
-  running: { icon: Loader2, color: 'text-blue-400', bg: 'bg-blue-900/30', spin: true },
-  completed: { icon: Check, color: 'text-green-400', bg: 'bg-green-900/30' },
-  failed: { icon: XCircle, color: 'text-red-400', bg: 'bg-red-900/30' }
+  pending: { icon: Loader2, color: 'text-yellow-400', bg: 'bg-yellow-900/20', border: 'border-yellow-700/30' },
+  running: { icon: Loader2, color: 'text-blue-400', bg: 'bg-blue-900/20', border: 'border-blue-700/30', spin: true },
+  completed: { icon: Check, color: 'text-green-400', bg: 'bg-green-900/20', border: 'border-green-700/30' },
+  failed: { icon: XCircle, color: 'text-red-400', bg: 'bg-red-900/20', border: 'border-red-700/30' }
 }
 
 export default function TaskMonitor({ tasks }) {
@@ -13,21 +13,23 @@ export default function TaskMonitor({ tasks }) {
   const hasActive = activeTasks.length > 0
 
   return (
-    <div className="bg-gray-900 rounded-xl overflow-hidden">
-      <div className="px-4 py-3 bg-gray-800 border-b border-gray-700 flex items-center gap-2">
-        <Zap size={18} className="text-yellow-400" />
-        <h2 className="font-semibold">Background Tasks</h2>
+    <div className="bg-gray-900/50 backdrop-blur border border-gray-800/50 rounded-2xl overflow-hidden shadow-xl">
+      <div className="px-5 py-4 bg-gradient-to-r from-gray-800/50 to-gray-800/30 border-b border-gray-700/50 flex items-center gap-2">
+        <div className="w-8 h-8 bg-gradient-to-br from-yellow-500 to-orange-600 rounded-lg flex items-center justify-center shadow-lg shadow-yellow-500/20">
+          <Zap size={16} className="text-white" />
+        </div>
+        <h2 className="font-semibold text-white">Background Tasks</h2>
         {hasActive && (
-          <span className="ml-auto text-xs bg-yellow-600 px-2 py-0.5 rounded-full">
+          <span className="ml-auto text-xs bg-gradient-to-r from-yellow-600 to-orange-600 px-2.5 py-1 rounded-full font-medium shadow-lg shadow-yellow-500/20">
             {activeTasks.length} active
           </span>
         )}
       </div>
 
-      <div className="p-4">
+      <div className="p-5">
         {tasks.length === 0 ? (
           <div className="text-center text-gray-500 py-6">
-            <Zap size={24} className="mx-auto mb-2 opacity-50" />
+            <Zap size={28} className="mx-auto mb-3 opacity-40" />
             <p className="text-sm">No active tasks</p>
           </div>
         ) : (
@@ -39,19 +41,19 @@ export default function TaskMonitor({ tasks }) {
               return (
                 <div
                   key={task.task_id}
-                  className={`${config.bg} border border-gray-700 rounded-lg p-3`}
+                  className={`${config.bg} border ${config.border} rounded-xl p-4`}
                 >
-                  <div className="flex items-center gap-2 mb-1">
+                  <div className="flex items-center gap-2 mb-2">
                     <Icon
                       size={16}
                       className={`${config.color} ${config.spin ? 'animate-spin' : ''}`}
                     />
-                    <span className="text-sm font-medium">
+                    <span className="text-sm font-medium capitalize">
                       {task.task_type.replace('_', ' ')}
                     </span>
                   </div>
                   <div className="text-xs text-gray-400">
-                    Status: {task.status}
+                    Status: <span className="capitalize">{task.status}</span>
                   </div>
                   {task.human_agent_name && (
                     <div className="text-xs text-green-400 mt-1">
