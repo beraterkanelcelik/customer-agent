@@ -255,7 +255,19 @@ async def get_sales_voice_token(request: SalesTokenRequest):
 
     This allows sales staff to join the same room as the customer
     when they accept an escalation.
+
+    A short delay is introduced to give the customer time to hear
+    the handoff message before the sales person connects.
     """
+    import asyncio
+
+    # Add connection delay to match customer experience
+    # This gives the customer time to hear "connecting you now" before sales actually joins
+    delay = settings.sales_connection_delay_seconds
+    if delay > 0:
+        print(f"Sales connection delay: {delay}s for session {request.session_id}")
+        await asyncio.sleep(delay)
+
     # Create LiveKit token for sales
     token = livekit_api.AccessToken(
         settings.livekit_api_key,

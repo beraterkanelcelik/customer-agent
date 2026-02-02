@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     human_check_max_seconds: int = Field(default=25)
     human_availability_chance: float = Field(default=0.6)
 
+    # Sales handoff
+    sales_connection_delay_seconds: float = Field(
+        default=10.0,
+        description="Delay before sales can connect (gives time for agent to speak handoff message)"
+    )
+
     # Session
     session_timeout_minutes: int = Field(default=30)
     max_turns: int = Field(default=50)

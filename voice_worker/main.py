@@ -26,6 +26,43 @@ logging.getLogger("livekit.agents").setLevel(logging.WARNING)
 logging.getLogger("livekit").setLevel(logging.WARNING)
 
 
+def prewarm_process(proc):
+    """
+    Prewarm function called once per worker process before handling jobs.
+
+    This is the correct place to load ML models because:
+    1. It runs in the worker subprocess (not the main process)
+    2. It's called only once per worker, before any jobs
+    3. Models stay loaded in memory for all subsequent jobs
+    """
+    logger.info("Prewarming worker process - loading models...")
+
+    status = {"ready": False, "stt_loaded": False, "tts_loaded": False}
+    update_status_in_redis(status)
+
+    # Load STT model
+    try:
+        stt.load_model()
+        status["stt_loaded"] = True
+        update_status_in_redis(status)
+        logger.info("STT model loaded in worker process")
+    except Exception as e:
+        logger.error(f"Failed to load STT model: {e}")
+
+    # Load TTS model
+    try:
+        tts.load_model()
+        status["tts_loaded"] = True
+        update_status_in_redis(status)
+        logger.info("TTS model loaded in worker process")
+    except Exception as e:
+        logger.error(f"Failed to load TTS model: {e}")
+
+    status["ready"] = status["stt_loaded"] and status["tts_loaded"]
+    update_status_in_redis(status)
+    logger.info("Worker process prewarming complete")
+
+
 async def entrypoint(ctx: JobContext):
     """
     Main entrypoint for the voice agent.
@@ -121,34 +158,6 @@ def update_status_in_redis(status: dict):
         logger.warning(f"Failed to update Redis status: {e}")
 
 
-def preload_models():
-    """Preload ML models at startup for faster first response."""
-    logger.info("Preloading models...")
-
-    status = {"ready": False, "stt_loaded": False, "tts_loaded": False}
-    update_status_in_redis(status)
-
-    try:
-        stt.load_model()
-        status["stt_loaded"] = True
-        update_status_in_redis(status)
-        logger.info("STT model loaded")
-    except Exception as e:
-        logger.error(f"Failed to load STT model: {e}")
-
-    try:
-        tts.load_model()
-        status["tts_loaded"] = True
-        update_status_in_redis(status)
-        logger.info("TTS model loaded")
-    except Exception as e:
-        logger.error(f"Failed to load TTS model: {e}")
-
-    status["ready"] = status["stt_loaded"] and status["tts_loaded"]
-    update_status_in_redis(status)
-    logger.info("Model preloading complete")
-
-
 if __name__ == "__main__":
     logger.info("Starting Voice Worker...")
     logger.info(f"LiveKit URL: {settings.livekit_url}")
@@ -156,22 +165,25 @@ if __name__ == "__main__":
     logger.info(f"Whisper model: {settings.whisper_model} (device: {settings.whisper_device})")
     logger.info(f"Kokoro TTS voice: {settings.kokoro_voice}")
 
-    # Preload models
-    preload_models()
-
     logger.info("Starting LiveKit agent worker...")
 
     # Add 'start' command if not provided
     if len(sys.argv) == 1:
         sys.argv.append("start")
 
-    # Use the new 0.8+ pattern with entrypoint_fnc
+    # Use prewarm_fnc to load models in worker subprocess (not main process)
+    # This ensures models are loaded once per worker and stay in GPU memory
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
+            prewarm_fnc=prewarm_process,
             api_key=settings.livekit_api_key,
             api_secret=settings.livekit_api_secret,
             ws_url=settings.livekit_url,
             job_memory_warn_mb=0,  # Disable memory warnings (models use ~600MB)
+            # Give enough time for model loading (Whisper + Kokoro can take 60+ seconds)
+            initialize_process_timeout=120.0,
+            # Only prewarm 1 worker to avoid GPU memory contention
+            num_idle_processes=1,
         )
     )

@@ -70,6 +70,12 @@ class DealershipVoiceAgent:
         self._idle_entered_at: Optional[datetime] = None
         self._human_participants: Set[str] = set()
         self._idle_task: Optional[asyncio.Task] = None
+        self._idle_transition_pending = False  # Prevent race conditions during idle transition
+        self._pending_human_join: Optional[str] = None  # Track pending human before actual join
+
+        # Customer context for human handoff
+        self._customer_name: Optional[str] = None
+        self._humans_introduced: Set[str] = set()  # Track which humans have been introduced
 
     async def initialize(self):
         """Initialize the agent."""
@@ -138,10 +144,23 @@ class DealershipVoiceAgent:
 
         In idle mode, the agent stops processing audio (listening/responding)
         but keeps the connection alive for when the human leaves.
+
+        The delay allows the agent to finish speaking the handoff message before
+        entering idle mode. Both customer and sales hear the relevant messages
+        during this delay period.
+
+        Args:
+            delay_seconds: Delay before entering idle mode (for speaking handoff message)
         """
         if delay_seconds is None:
             delay_seconds = settings.idle_delay_seconds
 
+        # Prevent multiple concurrent transitions
+        if self._idle_transition_pending:
+            logger.debug("Idle transition already pending, ignoring duplicate request")
+            return
+
+        self._idle_transition_pending = True
         logger.info(f"Entering idle mode in {delay_seconds} seconds...")
 
         # Wait for the delay (allows current speech to finish and customer to hear it)
@@ -150,10 +169,26 @@ class DealershipVoiceAgent:
         # Check if we should still enter idle (human might have left during delay)
         if not self._human_participants:
             logger.info("No human participants remaining, skipping idle mode")
+            self._idle_transition_pending = False
             return
+
+        # Already idle - no need to re-enter
+        if self.is_idle:
+            logger.debug("Already in idle mode")
+            self._idle_transition_pending = False
+            return
+
+        # Clear any buffered audio to prevent stale speech from being processed
+        if self.speech_buffer:
+            logger.info("Clearing speech buffer before entering idle mode")
+            self.speech_buffer = []
+        self.is_user_speaking = False
+        self.speech_frames = 0
+        self.silence_frames = 0
 
         self.is_idle = True
         self._idle_entered_at = datetime.utcnow()
+        self._idle_transition_pending = False
         logger.info("🔇 Agent entered IDLE MODE - stopped listening while human is present")
 
         # Notify backend/frontend about idle state
@@ -180,10 +215,17 @@ class DealershipVoiceAgent:
             return
 
         self.is_idle = False
+        self._idle_transition_pending = False
         idle_duration = None
         if self._idle_entered_at:
             idle_duration = (datetime.utcnow() - self._idle_entered_at).total_seconds()
         self._idle_entered_at = None
+
+        # Reset audio state for clean resumption
+        self.speech_buffer = []
+        self.is_user_speaking = False
+        self.speech_frames = 0
+        self.silence_frames = 0
 
         logger.info(f"🔊 Agent exited IDLE MODE - resuming normal operation (was idle for {idle_duration:.1f}s)" if idle_duration else "🔊 Agent exited IDLE MODE")
 
@@ -205,21 +247,101 @@ class DealershipVoiceAgent:
         if speak_resume:
             await self.speak(settings.idle_resume_message)
 
-    def handle_human_joined(self, human_id: str):
+    def handle_human_joined(self, human_id: str, from_participant_event: bool = True):
         """
         Handle a human participant joining the room.
 
-        Tracks the participant and schedules idle mode entry.
+        Tracks the participant and schedules idle mode entry with delay.
+        The delay allows the agent to finish speaking the handoff message.
+
+        Args:
+            human_id: Identity of the human participant
+            from_participant_event: True if called from participant_connected (actual join),
+                                   False if called from WebSocket signal (pending join)
         """
         self._human_participants.add(human_id)
         logger.info(f"Human joined: {human_id}. Total humans: {len(self._human_participants)}")
 
-        # Cancel any existing idle task (e.g., if another human joins while waiting)
-        if self._idle_task and not self._idle_task.done():
-            self._idle_task.cancel()
+        if from_participant_event:
+            # Human has actually joined the room via LiveKit
+            # DON'T reset the idle timer if one is already pending - the delay is intentional
+            # to let the agent finish speaking the handoff message
+            if self._idle_task and not self._idle_task.done():
+                logger.info(f"Idle task already pending, not resetting timer for {human_id}")
+                # Schedule intro message for when we enter idle (after current message finishes)
+                if human_id not in self._humans_introduced:
+                    asyncio.create_task(self._schedule_human_introduction(human_id))
+            else:
+                # No pending idle task - schedule one with delay and intro
+                self._idle_task = asyncio.create_task(self._handle_human_joined_async(human_id))
+        else:
+            # This is a pending join signal (from WebSocket) - the human hasn't actually joined yet
+            # Schedule idle mode entry with delay to allow handoff message to be spoken
+            self._pending_human_join = human_id
 
-        # Schedule idle mode entry
-        self._idle_task = asyncio.create_task(self.enter_idle_mode())
+            # Only create a new task if one isn't already pending
+            if self._idle_task is None or self._idle_task.done():
+                self._idle_task = asyncio.create_task(self.enter_idle_mode())
+
+    async def _handle_human_joined_async(self, human_id: str):
+        """
+        Async handler for when a human actually joins the room.
+
+        Waits for the delay (so agent can speak), then enters idle mode and speaks introduction.
+        """
+        # Wait for the delay to let agent finish speaking handoff message to customer
+        await self.enter_idle_mode()
+
+        # Speak introduction to the human (if not already introduced)
+        if human_id not in self._humans_introduced:
+            self._humans_introduced.add(human_id)
+            await self._speak_human_introduction(human_id)
+
+    async def _schedule_human_introduction(self, human_id: str):
+        """
+        Schedule speaking the introduction to a human after current speech finishes.
+
+        This is called when a human joins while an idle task is already pending.
+        """
+        # Wait for current speech to finish and idle mode to be entered
+        while not self.is_idle and self._running:
+            await asyncio.sleep(0.1)
+
+        # Now speak the introduction
+        if human_id not in self._humans_introduced and self._running:
+            self._humans_introduced.add(human_id)
+            await self._speak_human_introduction(human_id)
+
+    async def _speak_human_introduction(self, human_id: str):
+        """
+        Speak an introduction message to the human agent.
+
+        This helps the sales rep understand who they're about to talk to.
+        """
+        # Build customer name part
+        customer_name_part = ""
+        if self._customer_name:
+            customer_name_part = f" named {self._customer_name}"
+
+        # Build introduction message from template
+        intro_message = settings.human_intro_message_template.format(
+            customer_name=customer_name_part
+        )
+
+        logger.info(f"Speaking intro to human {human_id}: {intro_message}")
+
+        # Temporarily exit idle mode to speak (just for this message)
+        was_idle = self.is_idle
+        self.is_idle = False
+        try:
+            await self.speak(intro_message)
+        finally:
+            self.is_idle = was_idle
+
+    def set_customer_name(self, name: Optional[str]):
+        """Set the customer name for use in human introductions."""
+        self._customer_name = name
+        logger.debug(f"Customer name set to: {name}")
 
     def handle_human_left(self, human_id: str):
         """
@@ -340,19 +462,29 @@ class DealershipVoiceAgent:
                             elif data.get("type") == "heartbeat":
                                 await ws.send(json.dumps({"type": "ping"}))
 
-                            # Handle human joined signal (from backend)
+                            # Handle human joined signal (from backend - this is a PENDING join)
+                            # The human hasn't actually joined LiveKit yet, this is advance notice
                             elif data.get("type") == "human_joined":
                                 human_id = data.get("human_id", "unknown_human")
                                 delay = data.get("delay", settings.idle_delay_seconds)
-                                logger.info(f"Received human_joined signal: {human_id}")
-                                self._human_participants.add(human_id)
+                                customer_name = data.get("customer_name")
+                                logger.info(f"Received human_joined signal (pending): {human_id}")
 
-                                # Cancel any existing idle task
-                                if self._idle_task and not self._idle_task.done():
-                                    self._idle_task.cancel()
+                                # Update customer name if provided
+                                if customer_name:
+                                    self.set_customer_name(customer_name)
 
-                                # Schedule idle mode entry with specified delay
-                                self._idle_task = asyncio.create_task(self.enter_idle_mode(delay))
+                                # Only schedule if human hasn't already joined via participant_connected
+                                if human_id not in self._human_participants:
+                                    # Use from_participant_event=False since this is a pending notification
+                                    self.handle_human_joined(human_id, from_participant_event=False)
+
+                            # Handle customer info update
+                            elif data.get("type") == "customer_info":
+                                customer_name = data.get("customer_name")
+                                if customer_name:
+                                    self.set_customer_name(customer_name)
+                                    logger.info(f"Customer name updated: {customer_name}")
 
                             # Handle human left signal (from backend)
                             elif data.get("type") == "human_left":
@@ -420,8 +552,15 @@ class DealershipVoiceAgent:
 
     async def _process_audio_frame(self, frame: rtc.AudioFrame):
         """Process a single audio frame for VAD."""
-        # Skip processing while in idle mode (human is handling the conversation)
-        if self.is_idle:
+        # Skip processing while in idle mode or transitioning to idle
+        # (human is handling the conversation)
+        if self.is_idle or self._idle_transition_pending:
+            # Clear any buffered speech to prevent stale audio from being processed
+            if self.speech_buffer:
+                logger.debug("Clearing speech buffer due to idle mode")
+                self.speech_buffer = []
+                self.is_user_speaking = False
+                self.speech_frames = 0
             return
 
         audio_data = np.frombuffer(frame.data, dtype=np.int16)
@@ -483,6 +622,11 @@ class DealershipVoiceAgent:
 
     async def _handle_user_speech(self, audio_data: bytes, sample_rate: int):
         """Process user speech through STT and get response with latency tracking."""
+        # Check if we should process this audio (might have entered idle mode while audio was in flight)
+        if self.is_idle or self._idle_transition_pending:
+            logger.info("Skipping user speech processing - agent is idle or entering idle mode")
+            return
+
         total_start = time.time()
         latency = {}
 
@@ -572,6 +716,11 @@ class DealershipVoiceAgent:
 
         if not text or not text.strip():
             logger.info("No speech detected in transcription")
+            return
+
+        # Re-check idle mode after STT (might have entered idle while transcribing)
+        if self.is_idle or self._idle_transition_pending:
+            logger.info(f"Discarding transcription '{text}' - agent entered idle mode during STT")
             return
 
         # Filter out Whisper hallucinations (common patterns when audio is unclear)

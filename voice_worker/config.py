@@ -47,6 +47,12 @@ class VoiceSettings(BaseSettings):
         description="Message spoken when resuming from idle mode"
     )
 
+    # Human handoff settings
+    human_intro_message_template: str = Field(
+        default="Connecting you to a customer{customer_name}. They requested assistance.",
+        description="Template for message spoken to human when they join. Use {customer_name} placeholder."
+    )
+
     class Config:
         env_file = ".env"
         extra = "ignore"

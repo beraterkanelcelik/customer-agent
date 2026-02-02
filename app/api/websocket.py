@@ -290,19 +290,32 @@ class ConnectionManager:
         for session_id in all_sessions:
             await self.broadcast(session_id, message)
 
-    async def send_human_joined(self, session_id: str, human_id: str, delay: float = 10.0):
+    async def send_human_joined(
+        self,
+        session_id: str,
+        human_id: str,
+        delay: float = 10.0,
+        customer_name: Optional[str] = None
+    ):
         """
         Signal voice worker that a human has joined the conversation.
 
         This triggers the agent to enter idle mode after the specified delay,
         allowing the current message to be heard before going silent.
+
+        Args:
+            session_id: The session ID
+            human_id: Identity of the human participant
+            delay: Seconds before entering idle mode
+            customer_name: Optional customer name for introduction
         """
         await self.broadcast(session_id, {
             "type": "human_joined",
             "human_id": human_id,
-            "delay": delay
+            "delay": delay,
+            "customer_name": customer_name
         })
-        print(f"Sent human_joined signal for session {session_id}, human: {human_id}")
+        print(f"Sent human_joined signal for session {session_id}, human: {human_id}, customer: {customer_name}")
 
     async def send_human_left(self, session_id: str, human_id: Optional[str] = None):
         """

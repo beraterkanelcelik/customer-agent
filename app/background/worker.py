@@ -137,8 +137,13 @@ class BackgroundWorker:
             try:
                 ws_manager = self._get_ws_manager()
                 participant_identity = f"sales_{sales_id}"
-                await ws_manager.send_human_joined(session_id, participant_identity, delay=10.0)
-                logger.info(f"[{session_id}] Sent human_joined signal for {participant_identity}")
+                await ws_manager.send_human_joined(
+                    session_id,
+                    participant_identity,
+                    delay=10.0,
+                    customer_name=customer_name
+                )
+                logger.info(f"[{session_id}] Sent human_joined signal for {participant_identity}, customer: {customer_name}")
             except Exception as e:
                 logger.warning(f"[{session_id}] Failed to send human_joined signal: {e}")
 
