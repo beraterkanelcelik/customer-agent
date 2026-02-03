@@ -1,0 +1,16 @@
+# LiveKit SIP Server Configuration
+# https://docs.livekit.io/transport/self-hosting/sip-server/
+
+api_key: devkey
+api_secret: secret
+ws_url: ws://livekit:7880
+
+redis:
+  address: redis:6379
+
+sip_port: 5060
+rtp_port: 10000-20000
+use_external_ip: true
+
+logging:
+  level: debug

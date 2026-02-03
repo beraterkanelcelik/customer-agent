@@ -10,21 +10,11 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(..., validation_alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-4.1-mini", validation_alias="OPENAI_MODEL")
 
-    # LiveKit
-    livekit_url: str = Field(default="ws://localhost:7880")
-    livekit_api_key: str = Field(default="devkey")
-    livekit_api_secret: str = Field(default="secret")
-
     # Database
     database_url: str = Field(default="sqlite+aiosqlite:///./data/dealership.db")
 
     # Redis
     redis_url: str = Field(default="redis://localhost:6379/0")
-
-    # Voice
-    whisper_model: str = Field(default="base")
-    whisper_device: str = Field(default="cpu")
-    piper_voice: str = Field(default="en_US-amy-medium")
 
     # App
     debug: bool = Field(default=False)
@@ -50,6 +40,13 @@ class Settings(BaseSettings):
     smtp_user: str = Field(default="")
     smtp_password: str = Field(default="")
     sales_email: str = Field(default="")
+
+    # Twilio Voice (for phone conversations and escalation)
+    twilio_account_sid: str = Field(default="")
+    twilio_auth_token: str = Field(default="")
+    twilio_phone_number: str = Field(default="")  # Your Twilio number (E.164 format)
+    twilio_webhook_base_url: str = Field(default="")  # Public URL for webhooks (e.g., ngrok)
+    customer_service_phone: str = Field(default="")  # Human agent number (E.164 format)
 
     class Config:
         env_file = ".env"

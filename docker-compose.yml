@@ -2,28 +2,6 @@ version: '3.8'
 
 services:
   # ============================================
-  # LiveKit Server - WebRTC Infrastructure
-  # ============================================
-  livekit:
-    image: livekit/livekit-server:latest
-    container_name: livekit
-    restart: unless-stopped
-    ports:
-      - "7880:7880"
-      - "7881:7881"
-      - "7882:7882/udp"
-    environment:
-      - "LIVEKIT_KEYS=devkey: secret"
-    command: --dev --bind 0.0.0.0 --node-ip 127.0.0.1
-    networks:
-      - dealership-net
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:7880"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # ============================================
   # Redis - Shared State Store
   # ============================================
   redis:
@@ -44,7 +22,7 @@ services:
       retries: 5
 
   # ============================================
-  # FastAPI Application - Main Backend
+  # FastAPI Application - Main Backend with GPU
   # ============================================
   app:
     build:
@@ -57,48 +35,35 @@ services:
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1-mini}
-      - LIVEKIT_URL=ws://livekit:7880
-      - LIVEKIT_API_KEY=devkey
-      - LIVEKIT_API_SECRET=secret
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=sqlite+aiosqlite:///./data/dealership.db
       - DEBUG=true
       - LOG_LEVEL=INFO
+      # Twilio Voice
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID:-}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-}
+      - TWILIO_PHONE_NUMBER=${TWILIO_PHONE_NUMBER:-}
+      - TWILIO_WEBHOOK_BASE_URL=${TWILIO_WEBHOOK_BASE_URL:-}
+      - CUSTOMER_SERVICE_PHONE=${CUSTOMER_SERVICE_PHONE:-}
+      # Audio Models (GPU-accelerated)
+      - WHISPER_MODEL=${WHISPER_MODEL:-medium}
+      - WHISPER_DEVICE=${WHISPER_DEVICE:-cuda}
+      - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-int8}
+      - KOKORO_VOICE=${KOKORO_VOICE:-af_heart}
+      - KOKORO_LANG=${KOKORO_LANG:-a}
+      # Hugging Face token for model downloads
+      - HF_TOKEN=${HF_TOKEN:-}
     volumes:
+      - ./app:/app/app        # Bind-mount code - no rebuild needed for code changes!
       - ./data:/app/data
       - ./logs:/app/logs
+      - ./models:/app/models
     depends_on:
-      livekit:
-        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
       - dealership-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # ============================================
-  # Voice Worker - STT/TTS + LiveKit Agent
-  # ============================================
-  voice-worker:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.voice
-    container_name: voice-worker
-    restart: unless-stopped
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - LIVEKIT_URL=ws://livekit:7880
-      - LIVEKIT_API_KEY=devkey
-      - LIVEKIT_API_SECRET=secret
-      - APP_API_URL=http://app:8000
-      - REDIS_URL=redis://redis:6379/0
-    volumes:
-      - ./models:/app/models
-    # GPU Support - requires NVIDIA Container Toolkit
+    # GPU Access for Faster-Whisper STT
     deploy:
       resources:
         reservations:
@@ -106,13 +71,11 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    depends_on:
-      app:
-        condition: service_healthy
-      livekit:
-        condition: service_healthy
-    networks:
-      - dealership-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # ============================================
   # Frontend - React Dashboard
@@ -128,7 +91,6 @@ services:
     environment:
       - VITE_API_URL=http://localhost:8000
       - VITE_WS_URL=ws://localhost:8000
-      - VITE_LIVEKIT_URL=ws://localhost:7880
     depends_on:
       - app
     networks:

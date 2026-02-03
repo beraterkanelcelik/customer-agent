@@ -74,32 +74,40 @@ ALWAYS confirm: "Your email is john@gmail.com, correct?"
 
 ### Booking
 - update_booking_info: Save booking details (name, phone, email, date, time, etc.)
+  **IMPORTANT: Call this IMMEDIATELY after each piece of info is provided!**
+  Don't wait to batch - call it right away so the dashboard updates in real-time.
 - check_availability: Check if a time slot is open
 - book_appointment: Book the appointment (requires customer_id!)
 - reschedule_appointment: Change appointment date/time
 - cancel_appointment: Cancel an appointment
 - get_customer_appointments: List customer's upcoming bookings
 
+### Escalation
+- request_human_agent: Transfer to a human team member
+
 ### Call Control
-- end_call: End the voice call gracefully (use when customer says goodbye)
-- request_human_agent: Transfer to human (use when customer asks for a human)
+- end_call: End the voice call gracefully with a farewell message
 
 ## BOOKING FLOW - FOLLOW THESE STEPS
 
+**CRITICAL**: Call update_booking_info IMMEDIATELY after the customer provides EACH piece of information.
+This updates the dashboard in real-time. Don't wait to batch - save each slot as you get it!
+
 1. **CUSTOMER INFO FIRST**: Before any booking details:
-   - Ask for NAME
-   - Ask for PHONE
-   - Ask for EMAIL
+   - Ask for NAME -> Call update_booking_info(customer_name=...) IMMEDIATELY
+   - Ask for PHONE -> Call update_booking_info(customer_phone=...) IMMEDIATELY
+   - Ask for EMAIL -> Call update_booking_info(customer_email=...) IMMEDIATELY
    - Call create_customer to save them (this gives you customer_id)
 
 2. **APPOINTMENT TYPE**: Ask if test drive or service
+   -> Call update_booking_info(appointment_type=...) IMMEDIATELY
 
 3. **DETAILS**:
-   - Service: Ask what service
-   - Test Drive: Call list_inventory, ask what vehicle
+   - Service: Ask what service -> Call update_booking_info(service_type=...) IMMEDIATELY
+   - Test Drive: Call list_inventory, ask what vehicle -> Call update_booking_info(vehicle_interest=...) IMMEDIATELY
 
 4. **DATE/TIME**:
-   - Ask for preferred DATE
+   - Ask for preferred DATE -> Call update_booking_info(preferred_date=..., preferred_time=...) IMMEDIATELY
    - Call check_availability
    - Confirm time
 
@@ -107,25 +115,41 @@ ALWAYS confirm: "Your email is john@gmail.com, correct?"
 
 6. **BOOK**: Call book_appointment with customer_id
 
-## WHEN TO USE SPECIFIC TOOLS
+## ESCALATION - MANDATORY TOOL USE
 
-### request_human_agent
-Call this when customer:
-- Asks to speak with a human, person, manager, supervisor, representative
-- Says "give me a human", "transfer me", "real person", etc.
-- Expresses frustration you can't resolve
+**CRITICAL**: When customer wants to speak with a human, you MUST call the request_human_agent tool!
+Just saying "I'm calling someone" is NOT enough - you must actually call the tool.
 
-### end_call
-Call this when customer:
-- Says goodbye ("bye", "goodbye", "that's all", "thanks, bye")
-- Has no pending needs and is done
-- After booking is complete and they confirm they're done
+Trigger phrases (call the tool when you hear these):
+- "give me a human", "talk to a person", "real person"
+- "speak with someone", "transfer me", "representative"
+- "talk to a manager", "supervisor", "sales rep"
+
+How to escalate:
+1. FIRST: Call request_human_agent(session_id, reason="customer request for human assistance")
+2. THEN: Say "Let me try to reach a team member for you" or "I'm checking if someone is available"
+   **DO NOT say "connecting you now" - the call outcome is not yet known!**
+3. Continue chatting while the call is being placed
+
+The tool triggers a real phone call to a team member in the background.
+Status updates (ringing, answered, unavailable) are relayed to the customer automatically.
+- If human answers: "Great news! Our team member answered. I'm connecting you now."
+- If no answer/declined: "I wasn't able to reach a team member. Let me continue helping you."
+These status messages are spoken automatically - you don't need to handle them.
+
+When customer says goodbye or conversation is complete:
+- Use the end_call tool with a warm farewell message
+- Example: end_call(farewell_message="Thank you for calling Springfield Auto. Have a great day!")
+- This ends the voice call gracefully
 
 ## VOICE INTERFACE RULES
 - Keep responses SHORT (1-2 sentences) - this is voice
 - Ask ONE question at a time
 - Don't repeat information already collected
 - Be warm and professional
+
+## SPECIAL MESSAGES
+- [CALL_STARTED]: New call connected. Greet warmly: "Hello! Welcome to Springfield Auto. I'm your virtual assistant. How can I help you today?"
 
 ## IMPORTANT
 - You make ALL decisions - no hardcoded logic exists
@@ -153,6 +177,11 @@ def get_date_context() -> str:
 def build_context(state: ConversationState) -> str:
     """Build context string showing current state for the LLM."""
     lines = []
+
+    # Voice call indicator
+    if state.is_voice_call:
+        lines.append("INTERFACE: Voice call - Keep responses SHORT (1-2 sentences)")
+        lines.append("")
 
     # Date context
     lines.append(get_date_context())
@@ -453,6 +482,7 @@ async def _parse_tool_results(state: ConversationState) -> Dict[str, Any]:
 
     if raw_updates:
         logger.info(f"[POSTPROCESS] Applying slot updates: {raw_updates}")
+        logger.info(f"[POSTPROCESS] _customer_identified={raw_updates.get('_customer_identified')}, _customer_id={raw_updates.get('_customer_id')}, _customer_name={raw_updates.get('_customer_name')}")
         slots = state.booking_slots.model_copy()
 
         if "appointment_type" in raw_updates:
@@ -471,13 +501,15 @@ async def _parse_tool_results(state: ConversationState) -> Dict[str, Any]:
 
         # Customer identification
         if raw_updates.get("_customer_identified"):
-            updates["customer"] = CustomerContext(
+            customer_ctx = CustomerContext(
                 customer_id=raw_updates.get("_customer_id"),
                 name=raw_updates.get("_customer_name"),
                 phone=raw_updates.get("_customer_phone") or slots.customer_phone,
                 email=raw_updates.get("_customer_email") or slots.customer_email,
                 is_identified=True
             )
+            updates["customer"] = customer_ctx
+            logger.info(f"[POSTPROCESS] Customer identified: id={customer_ctx.customer_id}, name={customer_ctx.name}, is_identified={customer_ctx.is_identified}")
 
         # Confirmed appointment
         if raw_updates.get("_confirmed_appointment"):
@@ -632,6 +664,7 @@ async def process_message(
         "should_respond": current_state.should_respond,
         "needs_slot_filling": current_state.needs_slot_filling,
         "waiting_for_background": current_state.waiting_for_background,
+        "is_voice_call": current_state.is_voice_call,
         "prepend_message": current_state.prepend_message,
         "turn_count": current_state.turn_count,
         "created_at": current_state.created_at,
@@ -640,6 +673,12 @@ async def process_message(
 
     try:
         result = await conversation_graph.ainvoke(input_state)
+        # Log customer state after processing
+        customer_result = result.get("customer", {})
+        if hasattr(customer_result, 'customer_id'):
+            logger.info(f"[GRAPH] Result customer (obj): id={customer_result.customer_id}, name={customer_result.name}, is_identified={customer_result.is_identified}")
+        elif isinstance(customer_result, dict):
+            logger.info(f"[GRAPH] Result customer (dict): id={customer_result.get('customer_id')}, name={customer_result.get('name')}, is_identified={customer_result.get('is_identified')}")
         return ConversationState(**result)
     except Exception as e:
         logger.error(f"Graph error: {e}", exc_info=True)

@@ -6,7 +6,6 @@ removing all hardcoded phrase detection.
 """
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
-import asyncio
 import time
 import logging
 
@@ -30,35 +29,21 @@ async def request_human_agent(session_id: str, reason: str) -> str:
     - Customer uses phrases like "give me a human", "transfer me", "real person"
     - Customer asks for someone specific (manager, supervisor, sales rep)
 
-    This will check human availability and notify the customer.
+    This will initiate a phone call to the customer service number.
+    The customer stays with the AI while the call is being placed.
     """
-    from app.background.worker import background_worker
-    from app.schemas.enums import TaskType, TaskStatus
-    from app.schemas.task import BackgroundTask
-
     logger.info(f"[ESCALATION] Requested for session {session_id}: {reason}")
 
-    # Create task ID
+    # Create task ID for tracking
     task_id = f"esc_{session_id}_{int(time.time())}"
 
-    # Spawn background check for human availability
-    if background_worker:
-        asyncio.create_task(
-            background_worker.execute_human_check(
-                task_id=task_id,
-                session_id=session_id,
-                customer_name=None,
-                customer_phone=None,
-                reason=reason
-            )
-        )
-        logger.info(f"[ESCALATION] Background task spawned: {task_id}")
-    else:
-        logger.warning("[ESCALATION] No background worker available")
+    # No background worker needed - Twilio voice service handles the actual phone call
+    # The voice service will see needs_escalation=True and start calling CUSTOMER_SERVICE_PHONE
+    logger.info(f"[ESCALATION] Task ID: {task_id} - Twilio voice service will handle the call")
 
-    # Return structured response for service layer to parse
+    # Return structured response - voice service will initiate phone call
     return (
         f"ESCALATION_STARTED:task_id={task_id}|"
-        "I'm checking if one of our team members is available right now. "
-        "This will take just a moment. Is there anything else I can help you with while we wait?"
+        "I'm calling one of our team members right now. "
+        "You can keep talking to me while I try to reach them."
     )

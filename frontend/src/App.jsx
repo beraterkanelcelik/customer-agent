@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { Phone, PhoneOff, Mic, MicOff, Users, GitBranch } from 'lucide-react'
-import CallButton from './components/CallButton'
+import { Phone, PhoneOff, GitBranch, PhoneCall, PhoneIncoming } from 'lucide-react'
 import Transcript from './components/Transcript'
 import AgentState from './components/AgentState'
 import CustomerInfo from './components/CustomerInfo'
@@ -9,16 +8,15 @@ import TaskMonitor from './components/TaskMonitor'
 import BookingSlots from './components/BookingSlots'
 import AvailabilityCalendar from './components/AvailabilityCalendar'
 import { useWebSocket } from './hooks/useWebSocket'
-import { useLiveKit } from './hooks/useLiveKit'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000'
-const LIVEKIT_URL = import.meta.env.VITE_LIVEKIT_URL || 'ws://localhost:7880'
 
 export default function App() {
   const [sessionId, setSessionId] = useState(null)
   const [isCallActive, setIsCallActive] = useState(false)
-  const [isMuted, setIsMuted] = useState(false)
+  const [callState, setCallState] = useState('idle') // idle, connecting, ai_conversation, processing, escalating, in_conference, ended
+  const [customerPhone, setCustomerPhone] = useState(null)
   const [transcript, setTranscript] = useState([])
   const [agentState, setAgentState] = useState({
     currentAgent: 'unified',
@@ -30,16 +28,19 @@ export default function App() {
   const [customer, setCustomer] = useState(null)
   const [bookingSlots, setBookingSlots] = useState({})
   const [confirmedAppointment, setConfirmedAppointment] = useState(null)
-  const [bookingInProgress, setBookingInProgress] = useState(false) // Tracks if booking has started
+  const [bookingInProgress, setBookingInProgress] = useState(false)
   const [pendingTasks, setPendingTasks] = useState([])
   const [error, setError] = useState(null)
   const [latency, setLatency] = useState(null)
   const [notifications, setNotifications] = useState([])
   const [voiceStatus, setVoiceStatus] = useState({ ready: false, stt_loaded: false, tts_loaded: false })
+  const [twilioPhone, setTwilioPhone] = useState(null)
 
-  // WebSocket for state updates
-  const { sendMessage } = useWebSocket(
-    sessionId ? `${WS_URL}/ws/${sessionId}` : null,
+  // WebSocket for state updates - always connect to dashboard endpoint
+  // The dashboard endpoint receives ALL events (both session-specific and global)
+  // via dashboard_callback, so there's no need to switch URLs when a call starts
+  const { sendMessage, isConnected: wsConnected } = useWebSocket(
+    `${WS_URL}/ws/dashboard`,
     {
       onMessage: (data) => {
         handleWSMessage(data)
@@ -50,28 +51,30 @@ export default function App() {
     }
   )
 
-  // LiveKit for voice
-  const { connect, disconnect, toggleMute, isConnected } = useLiveKit()
-
-  // Poll voice worker status
+  // Poll voice/backend status
   useEffect(() => {
-    const checkVoiceStatus = async () => {
+    const checkStatus = async () => {
       try {
-        const res = await fetch(`${API_URL}/api/voice/status`)
-        const data = await res.json()
-        setVoiceStatus(data)
+        // Check voice models status
+        const voiceRes = await fetch(`${API_URL}/api/voice/status`)
+        const voiceData = await voiceRes.json()
+        setVoiceStatus(voiceData)
+
+        // Get Twilio phone number from health endpoint or config
+        const healthRes = await fetch(`${API_URL}/health`)
+        const healthData = await healthRes.json()
+        if (healthData.twilio_phone) {
+          setTwilioPhone(healthData.twilio_phone)
+        }
       } catch (err) {
-        console.error('Failed to check voice status:', err)
+        console.error('Failed to check status:', err)
       }
     }
 
-    // Check immediately
-    checkVoiceStatus()
-
-    // Poll every 2 seconds until ready
+    checkStatus()
     const interval = setInterval(() => {
       if (!voiceStatus.ready) {
-        checkVoiceStatus()
+        checkStatus()
       }
     }, 2000)
 
@@ -80,8 +83,113 @@ export default function App() {
 
   const handleWSMessage = useCallback((data) => {
     switch (data.type) {
+      // Twilio call events
+      case 'call_started':
+        setSessionId(data.session_id)
+        setIsCallActive(true)
+        setCallState('connecting')
+        setCustomerPhone(data.customer_phone)
+        setTranscript([])
+        setBookingSlots({})
+        setConfirmedAppointment(null)
+        setBookingInProgress(false)
+        setCustomer(null)
+        setAgentState({
+          currentAgent: 'unified',
+          intent: null,
+          confidence: 0,
+          escalationInProgress: false,
+          humanAgentStatus: null
+        })
+        break
+
+      case 'stream_started':
+      case 'stream_resumed':
+        setCallState('ai_conversation')
+        if (data.resumed) {
+          // Returned from escalation
+          setAgentState(prev => ({
+            ...prev,
+            escalationInProgress: false,
+            humanAgentStatus: null
+          }))
+        }
+        break
+
+      case 'returned_to_ai':
+        // Customer returned to AI after escalation failed
+        setCallState('ai_conversation')
+        setAgentState(prev => ({
+          ...prev,
+          escalationInProgress: false,
+          humanAgentStatus: 'returned_to_ai'
+        }))
+        break
+
+      case 'stream_ended':
+      case 'call_ended':
+        setIsCallActive(false)
+        setCallState('idle')
+        // Keep transcript and state for review
+        break
+
+      case 'call_ending':
+        setCallState('ended')
+        // Agent is saying goodbye
+        break
+
+      case 'human_connected':
+        setCallState('in_conference')
+        setAgentState(prev => ({
+          ...prev,
+          humanAgentStatus: 'connected'
+        }))
+        break
+
+      case 'human_unavailable':
+        // Human is unavailable - will be returned to AI
+        setAgentState(prev => ({
+          ...prev,
+          humanAgentStatus: 'unavailable'
+        }))
+        // Note: The returned_to_ai event will follow shortly
+        break
+
+      case 'escalation':
+        setCallState('escalating')
+        setAgentState(prev => ({
+          ...prev,
+          escalationInProgress: true,
+          humanAgentStatus: data.status || 'checking'
+        }))
+        break
+
+      case 'human_status':
+        // Twilio call status updates (initiated, ringing, no-answer, etc.)
+        const isTerminalStatus = ['no-answer', 'busy', 'failed', 'returned_to_ai'].includes(data.status)
+        const isInProgressStatus = ['initiated', 'calling', 'ringing', 'answered'].includes(data.status)
+        setAgentState(prev => ({
+          ...prev,
+          // Only keep escalation in progress for active statuses
+          escalationInProgress: isInProgressStatus || data.status === 'connected',
+          humanAgentStatus: data.status || prev.humanAgentStatus
+        }))
+        // Clear terminal status after 10 seconds so the panel goes away
+        if (isTerminalStatus) {
+          setTimeout(() => {
+            setAgentState(prev => {
+              // Only clear if still showing the same terminal status
+              if (['no-answer', 'busy', 'failed', 'returned_to_ai'].includes(prev.humanAgentStatus)) {
+                return { ...prev, humanAgentStatus: null }
+              }
+              return prev
+            })
+          }, 10000)
+        }
+        break
+
+      // Standard state events
       case 'state_update':
-        // Merge with existing state to support partial updates
         setAgentState(prev => ({
           ...prev,
           currentAgent: data.current_agent ?? prev.currentAgent,
@@ -93,7 +201,6 @@ export default function App() {
         if (data.customer) setCustomer(data.customer)
         if (data.booking_slots) {
           setBookingSlots(data.booking_slots)
-          // Start booking mode if any slot is filled
           const hasAnySlot = Object.values(data.booking_slots).some(v => v !== null && v !== undefined)
           if (hasAnySlot) {
             setBookingInProgress(true)
@@ -101,11 +208,9 @@ export default function App() {
         }
         if (data.confirmed_appointment) {
           setConfirmedAppointment(data.confirmed_appointment)
-          // Reset booking mode after confirmation
           setBookingInProgress(false)
         }
         if (data.pending_tasks) setPendingTasks(data.pending_tasks)
-        // Also check intent to start booking mode
         if (data.intent === 'book_service' || data.intent === 'book_test_drive') {
           setBookingInProgress(true)
         }
@@ -118,6 +223,12 @@ export default function App() {
           timestamp: new Date().toLocaleTimeString(),
           agentType: data.agent_type
         }])
+        // Mark as processing when user speaks, ai_conversation when agent responds
+        if (data.role === 'user') {
+          setCallState('processing')
+        } else {
+          setCallState('ai_conversation')
+        }
         break
 
       case 'task_update':
@@ -128,7 +239,6 @@ export default function App() {
         break
 
       case 'notification':
-        // Add notification to list
         const newNotification = {
           id: data.notification_id,
           message: data.message,
@@ -136,8 +246,6 @@ export default function App() {
           timestamp: new Date().toLocaleTimeString()
         }
         setNotifications(prev => [...prev, newNotification])
-
-        // Also add to transcript so user sees it
         setTranscript(prev => [...prev, {
           role: 'assistant',
           content: data.message,
@@ -145,22 +253,24 @@ export default function App() {
           agentType: 'escalation',
           isNotification: true
         }])
-
-        // Auto-dismiss notification after 10 seconds
         setTimeout(() => {
           setNotifications(prev => prev.filter(n => n.id !== data.notification_id))
         }, 10000)
         break
 
       case 'latency':
-        setLatency(data.data)
-        // Also attach latency to the most recent assistant message
+        const latencyData = {
+          stt_ms: data.stt_ms,
+          llm_ms: data.llm_ms,
+          tts_ms: data.tts_ms,
+          total_ms: data.total_ms
+        }
+        setLatency(latencyData)
         setTranscript(prev => {
           const updated = [...prev]
-          // Find the most recent assistant message without latency
           for (let i = updated.length - 1; i >= 0; i--) {
             if (updated[i].role === 'assistant' && !updated[i].latency) {
-              updated[i] = { ...updated[i], latency: data.data }
+              updated[i] = { ...updated[i], latency: latencyData }
               break
             }
           }
@@ -168,31 +278,7 @@ export default function App() {
         })
         break
 
-      case 'end_call':
-        // Note: Don't add farewell to transcript here - the agent already sent it as its response
-        // This message is just a signal to end the call after the agent finishes speaking
-        // End call after 10 seconds to let agent fully speak the goodbye message
-        setTimeout(async () => {
-          try {
-            await disconnect()
-            setIsCallActive(false)
-            // Reset booking states
-            setBookingInProgress(false)
-            setBookingSlots({})
-            setConfirmedAppointment(null)
-            setCustomer(null)
-            if (sessionId) {
-              await fetch(`${API_URL}/api/sessions/${sessionId}`, { method: 'DELETE' })
-              setSessionId(null)
-            }
-          } catch (err) {
-            console.error('Error ending call:', err)
-          }
-        }, 10000)
-        break
-
       case 'availability_update':
-        // Pass the update to AvailabilityCalendar for real-time slot update
         setAvailabilityWsUpdate({
           type: data.type,
           slot_date: data.slot_date,
@@ -200,12 +286,11 @@ export default function App() {
           appointment_type: data.appointment_type,
           inventory_id: data.inventory_id,
           is_available: data.is_available,
-          timestamp: Date.now() // Ensure uniqueness for useEffect trigger
+          timestamp: Date.now()
         })
         break
 
       case 'booking_slot_update':
-        // Real-time update as slots are collected (before turn ends)
         setBookingSlots(prev => ({
           ...prev,
           [data.slot_name]: data.slot_value,
@@ -214,69 +299,23 @@ export default function App() {
         setBookingInProgress(true)
         break
     }
-  }, [disconnect, sessionId])
+  }, [])
 
-  // Key to force AvailabilityCalendar refresh
-  const [availabilityKey, setAvailabilityKey] = useState(0)
-  // WebSocket update to pass to AvailabilityCalendar
   const [availabilityWsUpdate, setAvailabilityWsUpdate] = useState(null)
 
-  const startCall = async () => {
-    try {
-      setError(null)
-
-      // Create session
-      const sessionRes = await fetch(`${API_URL}/api/sessions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({})
-      })
-      const sessionData = await sessionRes.json()
-      setSessionId(sessionData.session_id)
-
-      // Get LiveKit token
-      const tokenRes = await fetch(`${API_URL}/api/voice/token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionData.session_id })
-      })
-      const tokenData = await tokenRes.json()
-
-      // Connect to LiveKit
-      await connect(tokenData.livekit_url, tokenData.token)
-
-      setIsCallActive(true)
-      setTranscript([])
-      setLatency(null)
-
-    } catch (err) {
-      console.error('Failed to start call:', err)
-      setError('Failed to start call. Please try again.')
+  const getCallStateDisplay = () => {
+    switch (callState) {
+      case 'connecting': return { text: 'Connecting...', color: 'text-yellow-400', bg: 'bg-yellow-900/50' }
+      case 'ai_conversation': return { text: 'AI Speaking', color: 'text-green-400', bg: 'bg-green-900/50' }
+      case 'processing': return { text: 'Processing...', color: 'text-blue-400', bg: 'bg-blue-900/50' }
+      case 'escalating': return { text: 'Escalating', color: 'text-orange-400', bg: 'bg-orange-900/50' }
+      case 'in_conference': return { text: 'Human Connected', color: 'text-purple-400', bg: 'bg-purple-900/50' }
+      case 'ended': return { text: 'Ending...', color: 'text-gray-400', bg: 'bg-gray-700/50' }
+      default: return { text: 'Ready', color: 'text-gray-400', bg: 'bg-gray-800' }
     }
   }
 
-  const endCall = async () => {
-    try {
-      await disconnect()
-
-      if (sessionId) {
-        await fetch(`${API_URL}/api/sessions/${sessionId}`, {
-          method: 'DELETE'
-        })
-      }
-
-      setIsCallActive(false)
-      setSessionId(null)
-
-    } catch (err) {
-      console.error('Failed to end call:', err)
-    }
-  }
-
-  const handleMuteToggle = () => {
-    toggleMute()
-    setIsMuted(!isMuted)
-  }
+  const callStateDisplay = getCallStateDisplay()
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-950">
@@ -285,7 +324,7 @@ export default function App() {
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center text-xl shadow-lg shadow-indigo-500/20">
-              {'\u{1F697}'}
+              🚗
             </div>
             <div>
               <h1 className="text-xl font-bold bg-gradient-to-r from-white to-gray-300 bg-clip-text text-transparent">
@@ -303,15 +342,6 @@ export default function App() {
             >
               <GitBranch size={16} />
               <span>Agent Flow</span>
-            </Link>
-
-            {/* Sales Dashboard Link */}
-            <Link
-              to="/sales"
-              className="flex items-center gap-2 px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors"
-            >
-              <Users size={16} />
-              <span>Sales Dashboard</span>
             </Link>
 
             {/* Latency Display */}
@@ -339,7 +369,7 @@ export default function App() {
               </div>
             )}
 
-            {/* Voice Worker Status */}
+            {/* Voice Models Status */}
             {!isCallActive && (
               <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs ${
                 voiceStatus.ready
@@ -363,41 +393,62 @@ export default function App() {
             )}
 
             {/* Call Status */}
-            <div className={`flex items-center gap-2 px-4 py-2 rounded-full ${
-              isCallActive
-                ? 'bg-green-900/50 text-green-300'
-                : 'bg-gray-800 text-gray-400'
-            }`}>
-              <div className={`w-2 h-2 rounded-full ${
-                isCallActive ? 'bg-green-400 animate-pulse' : 'bg-gray-600'
-              }`} />
-              <span className="text-sm font-medium">
-                {isCallActive ? 'Call Active' : 'Ready'}
-              </span>
+            <div className={`flex items-center gap-2 px-4 py-2 rounded-full ${callStateDisplay.bg} ${callStateDisplay.color}`}>
+              {isCallActive ? (
+                <>
+                  <PhoneCall size={16} className="animate-pulse" />
+                  <span className="text-sm font-medium">{callStateDisplay.text}</span>
+                </>
+              ) : (
+                <>
+                  <Phone size={16} />
+                  <span className="text-sm font-medium">Waiting for Call</span>
+                </>
+              )}
             </div>
-
-            {/* Mute Button */}
-            {isCallActive && (
-              <button
-                onClick={handleMuteToggle}
-                className={`p-2 rounded-lg ${
-                  isMuted ? 'bg-red-600' : 'bg-gray-700 hover:bg-gray-600'
-                }`}
-              >
-                {isMuted ? <MicOff size={20} /> : <Mic size={20} />}
-              </button>
-            )}
-
-            {/* Call Button */}
-            <CallButton
-              isActive={isCallActive}
-              onStart={startCall}
-              onEnd={endCall}
-              disabled={!voiceStatus.ready}
-            />
           </div>
         </div>
       </header>
+
+      {/* Call Instructions Banner */}
+      {!isCallActive && (
+        <div className="bg-indigo-900/30 border-b border-indigo-800/50 px-6 py-4">
+          <div className="max-w-7xl mx-auto flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <PhoneIncoming size={24} className="text-indigo-400" />
+              <div>
+                <p className="text-indigo-200 font-medium">
+                  Call the AI Agent via Phone
+                </p>
+                <p className="text-indigo-300/70 text-sm">
+                  Dashboard will automatically display the conversation when a call is received
+                </p>
+              </div>
+            </div>
+            {twilioPhone && (
+              <div className="flex items-center gap-2 px-4 py-2 bg-indigo-800/50 rounded-lg">
+                <Phone size={16} className="text-indigo-300" />
+                <span className="text-indigo-100 font-mono text-lg">{twilioPhone}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Active Call Banner */}
+      {isCallActive && customerPhone && (
+        <div className="bg-green-900/30 border-b border-green-800/50 px-6 py-3">
+          <div className="max-w-7xl mx-auto flex items-center gap-4">
+            <div className="w-3 h-3 rounded-full bg-green-400 animate-pulse" />
+            <span className="text-green-200">
+              Active call from <span className="font-mono font-medium">{customerPhone}</span>
+            </span>
+            <span className="text-green-400/70 text-sm">
+              Session: {sessionId}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Error Banner */}
       {error && (
@@ -439,8 +490,9 @@ export default function App() {
       {/* Session ID Footer */}
       {sessionId && (
         <footer className="fixed bottom-0 left-0 right-0 bg-gray-900 border-t border-gray-800 px-6 py-2">
-          <div className="max-w-7xl mx-auto text-xs text-gray-500">
-            Session: {sessionId}
+          <div className="max-w-7xl mx-auto flex items-center justify-between text-xs text-gray-500">
+            <span>Session: {sessionId}</span>
+            <span>WebSocket: {wsConnected ? '🟢 Connected' : '🔴 Disconnected'}</span>
           </div>
         </footer>
       )}

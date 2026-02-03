@@ -9,7 +9,7 @@ This document serves as your guide to the Car Dealership Voice Agent (Customer A
 ```bash
 # 1. Setup environment
 cp .env.example .env
-# Edit .env and add your OPENAI_API_KEY
+# Edit .env and add your OPENAI_API_KEY and Twilio credentials
 
 # 2. Build and start all services
 docker-compose up -d --build
@@ -19,6 +19,8 @@ curl http://localhost:8000/health
 
 # 4. Open dashboard
 # Navigate to http://localhost:5173
+
+# 5. Call your Twilio number to start a conversation!
 ```
 
 ---
@@ -28,8 +30,8 @@ curl http://localhost:8000/health
 A real-time voice customer service agent for car dealerships featuring:
 - **Unified LangGraph agent** (single agent handles FAQ, booking, escalation)
 - **Async background tasks** (human escalation doesn't block conversation)
-- **Voice via LiveKit** + Faster-Whisper (STT) + Kokoro-82M (TTS)
-- **React dashboard** showing real-time agent state
+- **Voice via Twilio** + Faster-Whisper (STT) + Kokoro-82M (TTS)
+- **React dashboard** showing real-time agent state and transcripts
 - **SQLite database** with customers, appointments, FAQ
 
 ---
@@ -42,11 +44,11 @@ A real-time voice customer service agent for car dealerships featuring:
 | **LLM** | OpenAI GPT-4o-mini (configurable) |
 | **Voice STT** | Faster-Whisper (local, GPU-accelerated) |
 | **Voice TTS** | Kokoro-82M (local GPU) |
-| **Voice Infrastructure** | LiveKit (WebRTC) |
+| **Voice Infrastructure** | Twilio (Media Streams + WebSocket) |
 | **State Store** | Redis (with in-memory fallback) |
 | **Database** | SQLite (async via aiosqlite) |
 | **Frontend** | React 18 + Vite + TailwindCSS |
-| **Containerization** | Docker Compose (5 services) |
+| **Containerization** | Docker Compose (3 services) |
 
 ---
 
@@ -60,7 +62,9 @@ customer-agent/
 │   │   └── unified_agent.py  # Single agent with all capabilities
 │   ├── api/
 │   │   ├── routes.py         # HTTP endpoints
-│   │   └── websocket.py      # Real-time updates
+│   │   ├── routes_twilio.py  # Twilio escalation webhooks
+│   │   ├── voice_routes.py   # Twilio voice/media stream endpoints
+│   │   └── websocket.py      # Real-time updates to dashboard
 │   ├── background/
 │   │   ├── state_store.py    # Redis/memory state
 │   │   └── worker.py         # Async tasks
@@ -75,39 +79,32 @@ customer-agent/
 │   │   ├── customer.py       # Customer schemas
 │   │   └── task.py           # Background task schemas
 │   ├── services/
-│   │   └── conversation.py   # High-level conversation API
+│   │   ├── conversation.py   # High-level conversation API
+│   │   ├── audio_processor.py # STT/TTS using Faster-Whisper + Kokoro
+│   │   ├── twilio_service.py # Twilio outbound calls for escalation
+│   │   └── twilio_voice.py   # Twilio Media Streams voice handling
 │   └── tools/                # LangChain tools (all with Pydantic schemas)
 │       ├── faq_tools.py
 │       ├── customer_tools.py
 │       ├── booking_tools.py
 │       ├── slot_tools.py
 │       └── call_tools.py
-├── voice_worker/             # Voice processing service
-│   ├── agent.py              # LiveKit voice agent
-│   ├── stt.py                # Faster-Whisper wrapper
-│   ├── tts_kokoro.py         # Kokoro TTS wrapper
-│   ├── config.py             # Voice worker settings
-│   └── main.py               # Entrypoint
 ├── frontend/                 # React dashboard
 │   ├── src/
-│   │   ├── App.jsx
-│   │   ├── SalesDashboard.jsx
-│   │   ├── components/       # AgentState, BookingSlots, CallButton,
-│   │   │                     # CustomerInfo, TaskMonitor, Transcript
-│   │   └── hooks/            # useWebSocket, useLiveKit
+│   │   ├── App.jsx           # Main voice agent dashboard
+│   │   ├── AgentFlowDiagram.jsx # Architecture visualization
+│   │   ├── components/       # AgentState, BookingSlots, Transcript,
+│   │   │                     # CustomerInfo, TaskMonitor, AvailabilityCalendar
+│   │   └── hooks/            # useWebSocket
 │   ├── Dockerfile
 │   └── nginx.conf
 ├── docker/
 │   ├── Dockerfile.app
-│   ├── Dockerfile.voice
 │   └── entrypoint.sh
 ├── data/                     # SQLite DB (generated)
-├── models/                   # Whisper/Piper/Kokoro models
+├── models/                   # Whisper/Kokoro models (auto-downloaded)
 ├── logs/                     # Runtime logs (generated)
-├── docs/                     # PRD documentation
-│   ├── AGENT.md              # Agent-specific documentation
-│   └── PRD_PART_*.md         # Product Requirements (6 parts)
-└── architecture.md           # Detailed architecture document
+└── docs/                     # PRD documentation
 ```
 
 ---
@@ -116,14 +113,15 @@ customer-agent/
 
 | File | Purpose |
 |------|---------|
-| `app/agents/graph.py` | LangGraph workflow definition (simple 2-node flow) |
+| `app/agents/graph.py` | LangGraph workflow definition (tool-calling loop) |
 | `app/agents/unified_agent.py` | Single agent with all tools - the heart of the AI |
 | `app/schemas/state.py` | ConversationState - all state flows through this |
 | `app/background/state_store.py` | Redis/memory state management |
-| `voice_worker/agent.py` | LiveKit voice handling, VAD, barge-in |
-| `voice_worker/config.py` | Voice settings (VAD thresholds, sample rates) |
+| `app/services/twilio_voice.py` | Twilio Media Streams handling, VAD, audio processing |
+| `app/services/audio_processor.py` | STT (Faster-Whisper) and TTS (Kokoro) |
+| `app/api/voice_routes.py` | Twilio voice webhooks and WebSocket media stream |
 | `app/config.py` | All configuration via Pydantic settings |
-| `docker-compose.yml` | All 5 services orchestration |
+| `docker-compose.yml` | All 3 services orchestration |
 
 ---
 
@@ -131,15 +129,17 @@ customer-agent/
 
 ### 1. LangGraph Unified Agent Workflow
 
-The conversation flows through a simple graph:
+The conversation flows through a tool-calling loop:
 
 ```
-check_notifications -> unified_agent -> END
+preprocess_node -> agent_node -> [tool_node -> agent_node]* -> postprocess_node -> END
 ```
 
 **Nodes:**
-- `check_notifications`: Processes async background task results (escalation callbacks)
-- `unified_agent`: Single agent that handles ALL interactions (FAQ, booking, escalation, greetings)
+- `preprocess_node`: Processes async background task results (escalation callbacks)
+- `agent_node`: Invokes LLM with tools bound
+- `tool_node`: Executes tool calls and returns results
+- `postprocess_node`: Updates state, handles confirmations, prepends notifications
 
 **Why Single Agent?**
 - No routing issues (can't lose context mid-booking)
@@ -201,80 +201,83 @@ When user requests human assistance:
 1. UnifiedAgent detects escalation request and spawns async task
 2. Task runs 5-25 seconds (simulating availability check)
 3. Result creates `Notification` in state
-4. Next turn, `check_notifications` node delivers message
-5. Voice worker also listens via WebSocket for immediate delivery
+4. Next turn, `preprocess_node` delivers message
+5. Dashboard also receives updates via WebSocket
 
 ---
 
-## Voice Processing Pipeline
+## Voice Processing Pipeline (Twilio)
 
-### Full Flow (Speech -> Response -> Speech)
+### Full Flow (Phone Call -> AI Response -> Audio)
 
 ```
-1. User speaks into microphone
+1. Customer calls Twilio phone number
           │
           ▼
-2. Browser captures audio via WebRTC
+2. Twilio sends webhook to /api/voice/incoming
           │
           ▼
-3. LiveKit streams audio to voice-worker
+3. Backend returns TwiML with <Connect><Stream>
           │
           ▼
-4. VAD detects speech start/end
-   (energy-based, ~50ms frames)
+4. Twilio opens WebSocket to /api/voice/media-stream
           │
           ▼
-5. Audio buffered until silence detected
-   (min_silence_frames = 60 = ~1.2s)
+5. Audio streamed as base64 mulaw (8kHz)
           │
           ▼
-6. STT transcription (Faster-Whisper)
-   - Resamples 48kHz -> 16kHz
-   - Returns text
+6. VAD detects speech start/end
+   (energy-based, ~20ms frames)
           │
           ▼
-7. HTTP POST to /api/chat
-   - LangGraph processes message
-   - Returns response text
+7. Audio buffered until silence detected
+   (MIN_SILENCE_FRAMES = 30 = ~600ms)
           │
           ▼
-8. TTS synthesis (Kokoro)
-   - Returns WAV audio
-   - Sample rate: 24kHz
+8. STT transcription (Faster-Whisper)
+   - Converts mulaw -> linear PCM -> 16kHz WAV
+   - Returns transcribed text
           │
           ▼
-9. Audio resampled to 48kHz
+9. LangGraph processes message via conversation_service
+   - Returns response text + metadata
           │
           ▼
-10. Streamed to LiveKit in 20ms frames
+10. TTS synthesis (Kokoro)
+    - Returns MP3 audio
           │
           ▼
-11. User hears response
+11. Audio converted to mulaw 8kHz for Twilio
+          │
+          ▼
+12. Streamed back to Twilio in 20ms chunks
+          │
+          ▼
+13. Customer hears AI response
 ```
 
 ### VAD Configuration
 
-Key settings in `voice_worker/config.py`:
-- `vad_threshold = 0.012`: Energy threshold for speech detection
-- `min_speech_frames = 5`: Frames needed to confirm speech start
-- `min_silence_frames = 60`: Frames of silence to end utterance (~1.2s)
-- `barge_in_frames = 8`: Frames needed to trigger barge-in (~160ms)
+Key settings in `app/services/twilio_voice.py`:
+- `SILENCE_THRESHOLD = 500`: Energy threshold for speech detection
+- `MIN_SPEECH_FRAMES = 5`: Frames needed to confirm speech start (~100ms)
+- `MIN_SILENCE_FRAMES = 30`: Frames of silence to end utterance (~600ms)
 
-### Barge-In Support
+### Human Escalation via Twilio Conference
 
-The voice agent supports user interruption:
-- While speaking, still monitors audio energy
-- If user speaks for `barge_in_frames` (8 frames = ~160ms)
-- Sets `_interrupt_speaking = True`
-- TTS playback loop breaks early
-- User's speech is buffered and processed
+When the AI decides to escalate:
+1. AI calls `request_human_agent` tool
+2. Customer is moved to a Twilio Conference room
+3. Outbound call placed to `CUSTOMER_SERVICE_PHONE`
+4. Human answers -> joined to same conference
+5. Customer and human can now talk directly
 
 ### Latency Budget
 
 | Stage | Target | Notes |
 |-------|--------|-------|
 | VAD | <50ms | Energy-based detection |
-| STT | <500ms | Faster-Whisper base/small |
+| STT | <500ms | Faster-Whisper medium |
 | LangGraph | <2000ms | Includes LLM API calls |
 | TTS | <300ms | Kokoro (local GPU) |
 | **Total** | **<3s** | Acceptable for voice |
@@ -337,26 +340,11 @@ class ConversationState(BaseModel):
 
 ### State Persistence Flow
 
-1. Request arrives at `/api/chat`
+1. Request arrives at `/api/chat` or via Twilio media stream
 2. `state_store.get_state(session_id)` fetches from Redis
 3. State deserialized (messages converted back to LangChain objects)
 4. LangGraph processes with state
 5. Updated state saved via `state_store.set_state()`
-
-### Known Issues & Improvements
-
-**Issue 1: Message Serialization**
-- LangChain messages serialize as `{"type": "human", "content": "..."}`
-- Custom `deserialize_messages()` function handles reconstruction
-- Works but adds complexity
-
-**Issue 2: Dual State Management**
-- LangGraph has its own checkpointer system
-- We use external Redis instead (removed MemorySaver)
-- This works but means we rebuild state each turn
-
-**Potential Improvement:**
-Consider using LangGraph's native Redis checkpointer when available, or use the memory checkpointer for simpler deployments.
 
 ---
 
@@ -366,17 +354,11 @@ Consider using LangGraph's native Redis checkpointer when available, or use the 
 # Required
 OPENAI_API_KEY=sk-...
 
-# LiveKit (WebRTC)
-LIVEKIT_URL=ws://localhost:7880
-LIVEKIT_API_KEY=devkey
-LIVEKIT_API_SECRET=secret
-
 # Database
 DATABASE_URL=sqlite+aiosqlite:///./data/dealership.db
 
 # Redis
 REDIS_URL=redis://localhost:6379/0
-
 
 # App Settings
 DEBUG=true
@@ -386,6 +368,24 @@ LOG_LEVEL=INFO
 HUMAN_CHECK_MIN_SECONDS=15
 HUMAN_CHECK_MAX_SECONDS=25
 HUMAN_AVAILABILITY_CHANCE=0.6
+
+# Twilio Voice (Required for phone conversations)
+# Get credentials from https://console.twilio.com
+TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TWILIO_AUTH_TOKEN=your_auth_token_here
+TWILIO_PHONE_NUMBER=+15551234567           # Your Twilio number
+TWILIO_WEBHOOK_BASE_URL=https://your-ngrok-url.ngrok.io  # Public URL for webhooks
+CUSTOMER_SERVICE_PHONE=+15559876543        # Human agent number for escalation
+
+# Local Audio Models (STT/TTS)
+# Faster-Whisper for Speech-to-Text (GPU-accelerated)
+WHISPER_MODEL=medium           # Options: tiny, base, small, medium, large-v2
+WHISPER_DEVICE=cuda            # Options: cuda, cpu
+WHISPER_COMPUTE_TYPE=int8      # Options: int8, float16, float32
+
+# Kokoro-82M for Text-to-Speech (local, <2GB VRAM)
+KOKORO_VOICE=af_heart          # af_heart = warm friendly female voice
+KOKORO_LANG=a                  # a = American English
 ```
 
 ---
@@ -396,12 +396,15 @@ HUMAN_AVAILABILITY_CHANCE=0.6
 # Health check
 curl http://localhost:8000/health
 
-# Create session
+# Check voice models status
+curl http://localhost:8000/api/voice/status
+
+# Create session (for testing without phone)
 curl -X POST http://localhost:8000/api/sessions \
   -H "Content-Type: application/json" \
   -d '{}'
 
-# Send chat message
+# Send chat message (text mode)
 curl -X POST http://localhost:8000/api/chat \
   -H "Content-Type: application/json" \
   -d '{"session_id": "sess_xxxx", "message": "What are your hours?"}'
@@ -411,7 +414,6 @@ curl http://localhost:8000/api/faq
 
 # View logs
 docker-compose logs -f app
-docker-compose logs -f voice-worker
 ```
 
 ---
@@ -446,6 +448,51 @@ Since we use a single unified agent, adding new capabilities is simple:
 
 ---
 
+## Twilio Setup Guide
+
+### 1. Get Twilio Credentials
+
+1. Create account at https://console.twilio.com
+2. Get a phone number (Voice capable)
+3. Copy Account SID, Auth Token from dashboard
+
+### 2. Set Up ngrok for Local Development
+
+```bash
+# Install ngrok
+brew install ngrok  # or download from ngrok.com
+
+# Start tunnel
+ngrok http 8000
+
+# Copy the https URL (e.g., https://abc123.ngrok.io)
+```
+
+### 3. Configure Twilio Webhooks
+
+In Twilio Console > Phone Numbers > Your Number:
+- **Voice Configuration**:
+  - "A call comes in": Webhook, `https://your-ngrok-url/api/voice/incoming`, HTTP POST
+  - "Call status changes": `https://your-ngrok-url/api/voice/status`, HTTP POST
+
+### 4. Update .env
+
+```env
+TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TWILIO_AUTH_TOKEN=your_token
+TWILIO_PHONE_NUMBER=+15551234567
+TWILIO_WEBHOOK_BASE_URL=https://your-ngrok-url.ngrok.io
+CUSTOMER_SERVICE_PHONE=+15559876543  # Your personal phone for escalation testing
+```
+
+### 5. Test
+
+1. Start the app: `docker-compose up -d`
+2. Call your Twilio number
+3. Watch the dashboard at http://localhost:5173
+
+---
+
 ## Troubleshooting
 
 ### "Redis connection failed"
@@ -454,18 +501,24 @@ Since we use a single unified agent, adding new capabilities is simple:
 
 ### "Transcription returns empty"
 - Audio might be too short (<0.3s)
-- Check `min_speech_frames` and `min_silence_frames` thresholds
-- Verify Whisper model loaded correctly
+- Check `MIN_SPEECH_FRAMES` and `MIN_SILENCE_FRAMES` thresholds
+- Verify Whisper model loaded: check `/api/voice/status`
 
 ### "Agent not responding"
 - Check OpenAI API key is valid
 - View logs: `docker-compose logs -f app`
 - Verify LangGraph compiled correctly
 
-### "Voice not working"
-- Check LiveKit is healthy: `curl localhost:7880`
-- Verify token generation in `/api/voice/token`
-- Check browser microphone permissions
+### "Voice not working / No audio"
+- Check Twilio webhook URL is correct and reachable
+- Verify ngrok is running and URL matches .env
+- Check browser console for WebSocket errors
+- Ensure Twilio phone number has Voice capability
+
+### "TTS/STT models not loading"
+- Check GPU availability: `nvidia-smi`
+- If no GPU, set `WHISPER_DEVICE=cpu`
+- Models download on first use (~2-3GB)
 
 ---
 
@@ -478,6 +531,7 @@ Since we use a single unified agent, adding new capabilities is simple:
 5. **Analytics**: Track conversation metrics, intents, completion rates
 6. **Testing**: Add unit tests for agents and integration tests for full flow
 7. **Monitoring**: Add Prometheus metrics and health dashboards
+8. **Barge-in Support**: Allow user to interrupt AI while speaking
 
 ---
 

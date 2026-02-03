@@ -5,8 +5,6 @@ from typing import Optional
 from datetime import datetime
 import uuid
 
-from livekit import api as livekit_api
-
 from app.config import get_settings
 from app.api.deps import get_database, get_conversation_service
 from app.api.websocket import get_ws_manager
@@ -15,10 +13,9 @@ from app.database.models import FAQ, Customer, Appointment, ServiceType, Invento
 from app.schemas.api import (
     HealthResponse, ChatRequest, ChatResponse,
     CreateSessionRequest, SessionResponse,
-    VoiceTokenRequest, VoiceTokenResponse,
     FAQListResponse, FAQEntry,
     CustomerListResponse, AppointmentListResponse,
-    SalesRespondRequest, SalesRespondResponse, SalesTokenRequest,
+    SalesRespondRequest, SalesRespondResponse,
     AvailabilityResponse, AvailabilityDayResponse, AvailabilitySlotResponse
 )
 from app.schemas.customer import CustomerResponse
@@ -168,130 +165,30 @@ async def chat(
 @router.get("/voice/status")
 async def get_voice_status():
     """
-    Check if voice worker models are loaded and ready.
+    Check if local audio models (STT/TTS) are loaded and ready.
 
-    Returns status of STT and TTS model loading.
+    Returns status of Faster-Whisper and Kokoro model loading.
     """
-    from app.background.state_store import state_store
-    status = await state_store.get_voice_worker_status()
-    return status
+    from app.services.audio_processor import audio_processor
+    return {
+        "ready": audio_processor._stt_loaded and audio_processor._tts_loaded,
+        "stt_loaded": audio_processor._stt_loaded,
+        "tts_loaded": audio_processor._tts_loaded,
+        "stt_model": audio_processor._stt is not None,
+        "tts_model": audio_processor._tts is not None
+    }
 
 
-@router.post("/voice/token", response_model=VoiceTokenResponse)
-async def get_voice_token(request: VoiceTokenRequest):
-    """
-    Generate a LiveKit token for voice session.
-
-    The frontend uses this to connect to LiveKit room.
-    """
-    # Create LiveKit token
-    token = livekit_api.AccessToken(
-        settings.livekit_api_key,
-        settings.livekit_api_secret
-    )
-
-    token.with_identity(f"user_{request.session_id}")
-    token.with_name("Customer")
-
-    # Grant permissions
-    token.with_grants(livekit_api.VideoGrants(
-        room_join=True,
-        room=request.session_id,
-        can_publish=True,
-        can_subscribe=True
-    ))
-
-    jwt_token = token.to_jwt()
-
-    # Create room and dispatch an agent to it
-    try:
-        lk_api = livekit_api.LiveKitAPI(
-            settings.livekit_url,
-            settings.livekit_api_key,
-            settings.livekit_api_secret
-        )
-        # Create the room first
-        await lk_api.room.create_room(
-            livekit_api.CreateRoomRequest(
-                name=request.session_id,
-                empty_timeout=300,  # 5 minutes
-            )
-        )
-        # Check if agent already dispatched
-        dispatches = await lk_api.agent_dispatch.list_dispatch(
-            livekit_api.ListAgentDispatchRequest(room=request.session_id)
-        )
-        if not dispatches.agent_dispatches:
-            # Dispatch an agent to the room
-            await lk_api.agent_dispatch.create_dispatch(
-                livekit_api.CreateAgentDispatchRequest(
-                    room=request.session_id,
-                    agent_name="",  # Use default agent
-                )
-            )
-            print(f"Agent dispatched to room: {request.session_id}")
-        else:
-            print(f"Agent already dispatched to room: {request.session_id}")
-        await lk_api.aclose()
-    except Exception as e:
-        print(f"Room/Agent dispatch: {e}")
-
-    # Return localhost URL for browser access (not internal docker hostname)
-    return VoiceTokenResponse(
-        token=jwt_token,
-        livekit_url="ws://localhost:7880",
-        session_id=request.session_id
-    )
+# NOTE: LiveKit voice token endpoint removed - using Twilio voice instead
+# See /api/voice/* endpoints in voice_routes.py for Twilio voice handling
 
 
 # ============================================
 # Sales Endpoints
 # ============================================
 
-@router.post("/sales/token", response_model=VoiceTokenResponse)
-async def get_sales_voice_token(request: SalesTokenRequest):
-    """
-    Generate a LiveKit token for sales to join a customer call.
-
-    This allows sales staff to join the same room as the customer
-    when they accept an escalation.
-
-    A short delay is introduced to give the customer time to hear
-    the handoff message before the sales person connects.
-    """
-    import asyncio
-
-    # Add connection delay to match customer experience
-    # This gives the customer time to hear "connecting you now" before sales actually joins
-    delay = settings.sales_connection_delay_seconds
-    if delay > 0:
-        print(f"Sales connection delay: {delay}s for session {request.session_id}")
-        await asyncio.sleep(delay)
-
-    # Create LiveKit token for sales
-    token = livekit_api.AccessToken(
-        settings.livekit_api_key,
-        settings.livekit_api_secret
-    )
-
-    token.with_identity(f"sales_{request.sales_id}")
-    token.with_name(f"Sales ({request.sales_id})")
-
-    # Grant permissions
-    token.with_grants(livekit_api.VideoGrants(
-        room_join=True,
-        room=request.session_id,
-        can_publish=True,
-        can_subscribe=True
-    ))
-
-    jwt_token = token.to_jwt()
-
-    return VoiceTokenResponse(
-        token=jwt_token,
-        livekit_url="ws://localhost:7880",
-        session_id=request.session_id
-    )
+# NOTE: LiveKit sales token endpoint removed - using Twilio voice instead
+# Sales escalation is now handled via Twilio Conference in voice_routes.py
 
 
 @router.post("/sales/respond", response_model=SalesRespondResponse)

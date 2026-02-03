@@ -6,12 +6,13 @@ import structlog
 from app.config import get_settings
 from app.logging_config import setup_logging
 from app.api.routes import router as api_router
+from app.api.voice_routes import router as voice_router
 from app.api.websocket import router as ws_router, get_ws_manager
 from app.database.connection import init_db
 from app.background.state_store import state_store
 from app.background.worker import background_worker
-# Note: Escalation is now handled via request_human_agent tool which imports background_worker directly
 from app.schemas.task import Notification, BackgroundTask
+from app.services.audio_processor import audio_processor
 
 settings = get_settings()
 
@@ -24,14 +25,19 @@ logger = structlog.get_logger()
 async def notification_callback(session_id: str, notification: Notification):
     """Push high-priority notifications to connected clients via WebSocket."""
     ws_manager = get_ws_manager()
-    await ws_manager.broadcast(session_id, {
+    message_data = {
         "type": "notification",
         "session_id": session_id,
         "notification_id": notification.notification_id,
         "message": notification.message,
         "priority": notification.priority.value if hasattr(notification.priority, 'value') else notification.priority,
         "task_id": notification.task_id
-    })
+    }
+
+    # Send to session-specific WebSocket
+    await ws_manager.broadcast(session_id, message_data)
+    # Also send to global dashboard WebSocket for monitoring
+    await ws_manager.broadcast("dashboard", message_data)
 
     # Mark notification as delivered so it won't be re-delivered on next turn
     await state_store.mark_notification_delivered(session_id, notification.notification_id)
@@ -47,7 +53,7 @@ async def task_update_callback(session_id: str, task: BackgroundTask):
     status = task.status.value if hasattr(task.status, 'value') else task.status
     task_type = task.task_type.value if hasattr(task.task_type, 'value') else task.task_type
 
-    await ws_manager.broadcast(session_id, {
+    task_data = {
         "type": "task_update",
         "session_id": session_id,
         "task": {
@@ -60,21 +66,34 @@ async def task_update_callback(session_id: str, task: BackgroundTask):
             "human_agent_name": task.human_agent_name,
             "callback_scheduled": task.callback_scheduled
         }
-    })
+    }
+
+    # Send to session-specific WebSocket
+    await ws_manager.broadcast(session_id, task_data)
+    # Also send to global dashboard WebSocket for monitoring
+    await ws_manager.broadcast("dashboard", task_data)
+
     logger.info(f"Pushed task update to session {session_id}: {task.task_id} -> {status}")
 
     # For escalation tasks, also send state_update with human_agent_status
     if task_type == "human_escalation" and status == "completed":
         human_agent_status = "connected" if task.human_available else "unavailable"
-        escalation_in_progress = task.human_available  # Only stay in progress if connected
+        # Keep escalation_in_progress=True briefly so UI shows the result
+        # (The Twilio call flow will update this separately)
+        escalation_in_progress = True
 
-        await ws_manager.broadcast(session_id, {
+        state_data = {
             "type": "state_update",
             "session_id": session_id,
             "current_agent": "unified",
             "escalation_in_progress": escalation_in_progress,
             "human_agent_status": human_agent_status
-        })
+        }
+
+        # Send to both session and dashboard
+        await ws_manager.broadcast(session_id, state_data)
+        await ws_manager.broadcast("dashboard", state_data)
+
         logger.info(f"Pushed escalation state update: {human_agent_status}")
 
 
@@ -92,6 +111,10 @@ async def lifespan(app: FastAPI):
     logger.info("Connecting to state store...")
     await state_store.connect()
 
+    # Preload audio models (STT + TTS) for voice calls
+    logger.info("Preloading audio models (Faster-Whisper + Kokoro)...")
+    await audio_processor.preload()
+
     # Background worker is imported directly by escalation_tools.py
     # No need to wire it up here anymore
 
@@ -106,6 +129,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down...")
+    await audio_processor.close()
     await state_store.disconnect()
     logger.info("Shutdown complete")
 
@@ -129,6 +153,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(api_router, prefix="/api")
+app.include_router(voice_router, prefix="/api")  # Twilio voice webhooks at /api/voice/*
 app.include_router(ws_router)
 
 
@@ -138,5 +163,7 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "car-dealership-voice-agent",
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "twilio_phone": settings.twilio_phone_number,
+        "models_ready": audio_processor._stt_loaded and audio_processor._tts_loaded
     }

@@ -52,19 +52,13 @@ class BackgroundWorker:
         return get_ws_manager()
 
     async def _broadcast_task_update(self, session_id: str, task_id: str):
-        """Broadcast task update via callback.
-
-        Reads from atomic task key first (which has the latest updates),
-        falling back to main state if atomic key doesn't exist.
-        """
+        """Broadcast task update via callback."""
         if self.task_update_callback:
-            # Try to get task from atomic key first (has latest updates)
             task = await state_store.get_task_from_atomic(session_id, task_id)
 
             if task:
                 await self.task_update_callback(session_id, task)
             else:
-                # Fallback to main state if no atomic update
                 state = await state_store.get_state(session_id)
                 if state:
                     for t in state.pending_tasks:
@@ -89,7 +83,7 @@ class BackgroundWorker:
         2. If sales declines or times out: schedule callback and send email
         """
 
-        # Initialize full task in atomic storage (avoids race condition with main state)
+        # Initialize full task in atomic storage
         await state_store.init_task_atomic(session_id, task_id, TaskType.HUMAN_ESCALATION)
 
         # Update task status to running
@@ -131,9 +125,7 @@ class BackgroundWorker:
             )
             priority = NotificationPriority.INTERRUPT
 
-            # Signal voice worker about incoming human so it can enter idle mode
-            # Use delay of 10 seconds to let the customer hear the connection message
-            # IMPORTANT: Use the full participant identity that matches LiveKit (sales_{sales_id})
+            # Signal voice worker about incoming human
             try:
                 ws_manager = self._get_ws_manager()
                 participant_identity = f"sales_{sales_id}"
@@ -143,7 +135,7 @@ class BackgroundWorker:
                     delay=10.0,
                     customer_name=customer_name
                 )
-                logger.info(f"[{session_id}] Sent human_joined signal for {participant_identity}, customer: {customer_name}")
+                logger.info(f"[{session_id}] Sent human_joined signal for {participant_identity}")
             except Exception as e:
                 logger.warning(f"[{session_id}] Failed to send human_joined signal: {e}")
 
@@ -249,11 +241,7 @@ class BackgroundWorker:
         callback_time: str,
         reason: Optional[str]
     ):
-        """
-        Send callback confirmation email.
-
-        Broadcasts to Sales Dashboard for demo, and optionally sends real email if SMTP configured.
-        """
+        """Send callback confirmation email."""
         customer_display = customer_name or customer_phone or "Customer"
         email_subject = f"Callback Request - {customer_display}"
         email_body = f"""Springfield Auto - Callback Request
@@ -268,7 +256,7 @@ Reason: {reason or 'Customer requested human assistance'}
 This is an automated notification from the voice agent system.
 Please ensure this customer is contacted at the scheduled time."""
 
-        # Always broadcast to Sales Dashboard for demo visibility
+        # Broadcast to Sales Dashboard
         sales_mgr = self._get_sales_manager()
         await sales_mgr.broadcast({
             "type": "email_notification",
@@ -284,7 +272,7 @@ Please ensure this customer is contacted at the scheduled time."""
         })
         logger.info(f"[EMAIL] Broadcasted email notification to sales dashboard")
 
-        # Also send real email if SMTP is configured
+        # Send real email if SMTP is configured
         email_host = getattr(settings, 'smtp_host', None)
         email_user = getattr(settings, 'smtp_user', None)
         email_password = getattr(settings, 'smtp_password', None)

@@ -1,0 +1,21 @@
+# LiveKit SIP Service Configuration
+# Handles SIP trunking for Twilio integration
+
+# LiveKit server connection
+api_key: devkey
+api_secret: secret
+ws_url: ws://livekit:7880
+
+# SIP configuration
+sip:
+  # SIP signaling port (UDP)
+  port: 5060
+
+  # RTP port range for media
+  rtp_port_range:
+    start: 10000
+    end: 10100
+
+# Logging
+logging:
+  level: info

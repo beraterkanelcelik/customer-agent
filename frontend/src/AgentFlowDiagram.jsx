@@ -30,16 +30,20 @@ mermaid.initialize({
 
 const mainFlowChart = `
 flowchart TB
-    subgraph Voice["Voice Pipeline"]
-        MIC[Microphone] --> VAD[VAD Detection]
+    subgraph Twilio["Twilio Voice Pipeline"]
+        PHONE[Customer Phone] --> TWILIO[Twilio]
+        TWILIO --> WEBHOOK["/api/voice/incoming"]
+        WEBHOOK --> STREAM["Media Stream WebSocket"]
+        STREAM --> VAD[VAD Detection]
         VAD --> STT[Faster-Whisper STT]
         STT --> TEXT[Transcribed Text]
-        AUDIO[TTS Audio] --> SPEAKER[Speaker]
+        AUDIO[TTS Audio] --> MULAW[Convert to mulaw]
+        MULAW --> STREAM
     end
 
     subgraph Backend["FastAPI Backend"]
-        TEXT --> CHAT["/api/chat endpoint"]
-        CHAT --> GRAPH[LangGraph Workflow]
+        TEXT --> SERVICE[conversation_service]
+        SERVICE --> GRAPH[LangGraph Workflow]
         GRAPH --> RESPONSE[Response Text]
         RESPONSE --> TTS[Kokoro TTS]
         TTS --> AUDIO
@@ -68,7 +72,7 @@ flowchart TB
     GRAPH --> LangGraph
     TOOLS --> Capabilities
 
-    style Voice fill:#1e3a5f,stroke:#3b82f6
+    style Twilio fill:#1e3a5f,stroke:#3b82f6
     style Backend fill:#1e293b,stroke:#6366f1
     style LangGraph fill:#312e81,stroke:#8b5cf6
     style Capabilities fill:#1e3a3f,stroke:#14b8a6
@@ -336,7 +340,7 @@ export default function AgentFlowDiagram() {
         <section className="bg-gray-900/50 backdrop-blur border border-gray-800/50 rounded-2xl overflow-hidden">
           <div className="px-6 py-4 bg-gradient-to-r from-indigo-900/30 to-purple-900/30 border-b border-gray-700/50">
             <h2 className="text-lg font-semibold text-white">System Architecture</h2>
-            <p className="text-sm text-gray-400 mt-1">Voice pipeline, backend, and LangGraph workflow</p>
+            <p className="text-sm text-gray-400 mt-1">Twilio voice pipeline, backend, and LangGraph workflow</p>
           </div>
           <div className="p-6 overflow-x-auto">
             <div ref={mainRef} className="flex justify-center min-w-[800px]" />
@@ -409,7 +413,7 @@ export default function AgentFlowDiagram() {
             </div>
             <div className="flex items-center gap-3">
               <div className="w-4 h-4 rounded bg-blue-500"></div>
-              <span className="text-sm text-gray-300">Voice Pipeline</span>
+              <span className="text-sm text-gray-300">Twilio Voice</span>
             </div>
             <div className="flex items-center gap-3">
               <div className="w-4 h-4 rounded bg-yellow-500"></div>

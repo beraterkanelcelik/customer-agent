@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Dict, Any
 from datetime import datetime
 from langchain_core.messages import HumanMessage, AIMessage
 import logging
@@ -128,6 +128,70 @@ class ConversationService:
     async def end_session(self, session_id: str):
         """End and cleanup a session."""
         await state_store.delete_session(session_id)
+
+    async def process_voice_message(self, session_id: str, user_message: str) -> Dict[str, Any]:
+        """
+        Process a voice message and return response with control signals.
+
+        All decisions (escalation, end call) are made by the LangGraph agent.
+        This method simply invokes the agent and returns structured data.
+
+        Note: Human call status updates are now handled via real-time events
+        with barge-in support, not injected into user messages.
+        """
+        from app.tools.call_tools import get_pending_call_action
+
+        # Mark this session as a voice call (affects agent behavior)
+        state = await state_store.get_state(session_id)
+        if state and not state.is_voice_call:
+            state.is_voice_call = True
+            await state_store.set_state(session_id, state)
+
+        # Process through LangGraph - agent makes ALL decisions
+        chat_response = await self.process_message(session_id, user_message)
+
+        # Get customer name if available
+        customer_name = None
+        if chat_response.customer and chat_response.customer.name:
+            customer_name = chat_response.customer.name
+
+        # Check if agent triggered end_call tool
+        call_action = get_pending_call_action(session_id)
+        should_end = False
+        if call_action and call_action.get("action") == "end_call":
+            should_end = True
+            # Include farewell message if agent provided one
+            farewell = call_action.get("farewell_message")
+            if farewell and farewell not in chat_response.response:
+                # Agent's farewell might already be in response, avoid duplication
+                pass
+
+        # Escalation is determined by the agent via request_human_agent tool
+        # which sets escalation_in_progress in state
+        needs_escalation = chat_response.escalation_in_progress
+
+        # Extract escalation reason from pending tasks if available
+        escalation_reason = "general assistance"
+        if needs_escalation and chat_response.pending_tasks:
+            for task in chat_response.pending_tasks:
+                task_type = task.task_type.value if hasattr(task.task_type, 'value') else task.task_type
+                if task_type == "human_escalation":
+                    # Reason would be stored in task metadata if available
+                    escalation_reason = getattr(task, 'reason', None) or "assistance"
+                    break
+
+        return {
+            "response": chat_response.response,
+            "should_end": should_end,
+            "needs_escalation": needs_escalation,
+            "escalation_reason": escalation_reason,
+            "customer_name": customer_name,
+            "session_id": session_id,
+            # Include full response for richer frontend updates
+            "intent": chat_response.intent,
+            "booking_slots": chat_response.booking_slots,
+            "confirmed_appointment": chat_response.confirmed_appointment,
+        }
 
 
 # Global instance

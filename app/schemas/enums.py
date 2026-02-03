@@ -46,8 +46,15 @@ class TaskStatus(str, Enum):
 class TaskType(str, Enum):
     """Background task types."""
     HUMAN_ESCALATION = "human_escalation"
+    CUSTOMER_SERVICE_ESCALATION = "customer_service_escalation"
     SEND_EMAIL = "send_email"
     SCHEDULE_CALLBACK = "schedule_callback"
+
+
+class EscalationType(str, Enum):
+    """Types of escalation for human handoff."""
+    SALES = "sales"
+    CUSTOMER_SERVICE = "customer_service"
 
 
 class NotificationPriority(str, Enum):

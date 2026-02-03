@@ -66,11 +66,20 @@ class StateStore:
                 parsed = json.loads(data)
                 msg_count = len(parsed.get("messages", []))
                 logger.info(f"[{session_id}] Redis get: found {msg_count} messages in stored data")
+
+                # Log customer data from stored JSON
+                customer_json = parsed.get("customer", {})
+                logger.info(f"[{session_id}] Redis customer JSON: id={customer_json.get('customer_id')}, name={customer_json.get('name')}, is_identified={customer_json.get('is_identified')}")
+
                 # Log message structure for debugging
                 for i, msg in enumerate(parsed.get("messages", [])[:3]):
                     logger.info(f"[{session_id}]   stored msg[{i}]: type={msg.get('type')}, content={str(msg.get('content', ''))[:30]}...")
                 state = ConversationState(**parsed)
                 logger.info(f"[{session_id}] After deserialization: {len(state.messages)} messages")
+
+                # Log customer after deserialization
+                logger.info(f"[{session_id}] After deser customer: id={state.customer.customer_id}, name={state.customer.name}, is_identified={state.customer.is_identified}")
+
                 return state
             logger.info(f"[{session_id}] Redis get: no data found")
             return None
@@ -91,12 +100,28 @@ class StateStore:
             return state, state.version
         return None, 0
 
+    async def get_or_create_state(self, session_id: str) -> ConversationState:
+        """Get existing state or create a new one."""
+        state = await self.get_state(session_id)
+        if state:
+            return state
+
+        # Create new state
+        state = ConversationState(session_id=session_id)
+        await self.set_state(session_id, state)
+        logger.info(f"[{session_id}] Created new conversation state")
+        return state
+
     async def set_state(self, session_id: str, state: ConversationState):
         """Save conversation state."""
         state.last_updated = datetime.utcnow()
         data = state.model_dump(mode="json")
         msg_count = len(data.get("messages", []))
         logger.info(f"[{session_id}] Saving state with {msg_count} messages")
+
+        # Log customer data for debugging
+        customer_data = data.get("customer", {})
+        logger.info(f"[{session_id}] Saving customer: id={customer_data.get('customer_id')}, name={customer_data.get('name')}, is_identified={customer_data.get('is_identified')}")
 
         # Log message structure for debugging
         for i, msg in enumerate(data.get("messages", [])[:3]):  # First 3 messages

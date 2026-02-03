@@ -2,6 +2,14 @@ import React from 'react'
 import { Brain, UserCheck, Clock, XCircle, Bot } from 'lucide-react'
 
 const HUMAN_STATUS_CONFIG = {
+  initiated: {
+    label: 'Initiating call...',
+    icon: Clock,
+    bgColor: 'bg-blue-900/30',
+    borderColor: 'border-blue-700',
+    textColor: 'text-blue-300',
+    iconColor: 'text-blue-400'
+  },
   checking: {
     label: 'Checking availability...',
     icon: Clock,
@@ -9,6 +17,30 @@ const HUMAN_STATUS_CONFIG = {
     borderColor: 'border-orange-700',
     textColor: 'text-orange-300',
     iconColor: 'text-orange-400'
+  },
+  calling: {
+    label: 'Calling team member...',
+    icon: Clock,
+    bgColor: 'bg-blue-900/30',
+    borderColor: 'border-blue-700',
+    textColor: 'text-blue-300',
+    iconColor: 'text-blue-400'
+  },
+  ringing: {
+    label: 'Phone ringing...',
+    icon: Clock,
+    bgColor: 'bg-indigo-900/30',
+    borderColor: 'border-indigo-700',
+    textColor: 'text-indigo-300',
+    iconColor: 'text-indigo-400'
+  },
+  answered: {
+    label: 'Human answered, connecting...',
+    icon: UserCheck,
+    bgColor: 'bg-green-900/30',
+    borderColor: 'border-green-700',
+    textColor: 'text-green-300',
+    iconColor: 'text-green-400'
   },
   connected: {
     label: 'Human agent connected',
@@ -25,6 +57,38 @@ const HUMAN_STATUS_CONFIG = {
     borderColor: 'border-red-700',
     textColor: 'text-red-300',
     iconColor: 'text-red-400'
+  },
+  busy: {
+    label: 'Team member busy',
+    icon: XCircle,
+    bgColor: 'bg-orange-900/30',
+    borderColor: 'border-orange-700',
+    textColor: 'text-orange-300',
+    iconColor: 'text-orange-400'
+  },
+  'no-answer': {
+    label: 'No answer',
+    icon: XCircle,
+    bgColor: 'bg-yellow-900/30',
+    borderColor: 'border-yellow-700',
+    textColor: 'text-yellow-300',
+    iconColor: 'text-yellow-400'
+  },
+  failed: {
+    label: 'Could not connect',
+    icon: XCircle,
+    bgColor: 'bg-red-900/30',
+    borderColor: 'border-red-700',
+    textColor: 'text-red-300',
+    iconColor: 'text-red-400'
+  },
+  returned_to_ai: {
+    label: 'Returned to AI assistant',
+    icon: Bot,
+    bgColor: 'bg-gray-800/50',
+    borderColor: 'border-gray-600',
+    textColor: 'text-gray-300',
+    iconColor: 'text-gray-400'
   }
 }
 
@@ -107,8 +171,8 @@ export default function AgentState({ state }) {
           </div>
         )}
 
-        {/* Escalation Status */}
-        {state.escalationInProgress && (
+        {/* Escalation Status - show when in progress OR when there's a recent status */}
+        {(state.escalationInProgress || state.humanAgentStatus) && (
           <EscalationStatus status={state.humanAgentStatus} />
         )}
       </div>
@@ -122,12 +186,13 @@ function EscalationStatus({ status }) {
   const statusKey = status || 'checking'
   const config = HUMAN_STATUS_CONFIG[statusKey] || HUMAN_STATUS_CONFIG.checking
   const IconComponent = config.icon
+  const isInProgress = ['checking', 'calling', 'ringing'].includes(statusKey)
 
   return (
     <div className={`${config.bgColor} border ${config.borderColor} rounded-lg p-3`}>
       <div className="flex items-center gap-3">
         <div className={`${config.iconColor}`}>
-          <IconComponent size={20} className={statusKey === 'checking' ? 'animate-spin' : ''} />
+          <IconComponent size={20} className={isInProgress ? 'animate-spin' : ''} />
         </div>
         <div className="flex-1">
           <div className={`text-sm font-medium ${config.textColor}`}>
@@ -137,11 +202,11 @@ function EscalationStatus({ status }) {
             {config.label}
           </div>
         </div>
-        {statusKey === 'checking' && (
+        {isInProgress && (
           <div className="flex gap-1">
-            <div className="w-2 h-2 rounded-full bg-orange-400 animate-bounce" style={{ animationDelay: '0ms' }} />
-            <div className="w-2 h-2 rounded-full bg-orange-400 animate-bounce" style={{ animationDelay: '150ms' }} />
-            <div className="w-2 h-2 rounded-full bg-orange-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+            <div className={`w-2 h-2 rounded-full ${config.iconColor.replace('text-', 'bg-')} animate-bounce`} style={{ animationDelay: '0ms' }} />
+            <div className={`w-2 h-2 rounded-full ${config.iconColor.replace('text-', 'bg-')} animate-bounce`} style={{ animationDelay: '150ms' }} />
+            <div className={`w-2 h-2 rounded-full ${config.iconColor.replace('text-', 'bg-')} animate-bounce`} style={{ animationDelay: '300ms' }} />
           </div>
         )}
       </div>

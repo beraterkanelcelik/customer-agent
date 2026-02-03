@@ -98,12 +98,17 @@ async def _broadcast_slot_update(session_id: str, slot_name: str, slot_value: st
         from app.api.websocket import get_ws_manager
         ws_manager = get_ws_manager()
         if ws_manager:
-            await ws_manager.send_message(session_id, {
+            message = {
                 "type": "booking_slot_update",
+                "session_id": session_id,
                 "slot_name": slot_name,
                 "slot_value": slot_value,
                 "all_slots": all_slots
-            })
+            }
+            # Send to session-specific WebSocket
+            await ws_manager.send_message(session_id, message)
+            # Also send to global dashboard WebSocket for monitoring
+            await ws_manager.broadcast("dashboard", message)
             logger.info(f"[WS] Broadcast slot update: {slot_name}={slot_value}")
     except Exception as e:
         # Don't fail if WS not available

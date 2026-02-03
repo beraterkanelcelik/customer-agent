@@ -1,0 +1,27 @@
+# LiveKit Server Configuration
+# Self-hosted with SIP support for Twilio integration
+
+port: 7880
+rtc:
+  port_range_start: 50000
+  port_range_end: 50200
+  tcp_port: 7881
+  use_external_ip: false
+
+# API keys (match docker-compose)
+keys:
+  devkey: secret
+
+# Enable logging
+logging:
+  level: info
+  json: false
+
+# Redis for distributed state (optional for single node)
+# redis:
+#   address: redis:6379
+
+# SIP Configuration
+sip:
+  # Enable SIP support
+  enabled: true

@@ -206,7 +206,11 @@ class ConnectionManager:
             pending_tasks=state.pending_tasks
         )
 
-        await self.broadcast(session_id, update.model_dump())
+        message = update.model_dump()
+        # Send to session-specific WebSocket
+        await self.broadcast(session_id, message)
+        # Also send to global dashboard WebSocket
+        await self.broadcast("dashboard", message)
 
     async def send_state_update_direct(
         self,
@@ -247,7 +251,11 @@ class ConnectionManager:
             pending_tasks=pending_tasks or []
         )
 
-        await self.broadcast(session_id, update.model_dump())
+        message = update.model_dump()
+        # Send to session-specific WebSocket
+        await self.broadcast(session_id, message)
+        # Also send to global dashboard WebSocket
+        await self.broadcast("dashboard", message)
 
     async def send_transcript(self, session_id: str, role: str, content: str, agent_type: str = None):
         """Send transcript update."""

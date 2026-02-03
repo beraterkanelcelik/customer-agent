@@ -176,6 +176,9 @@ class ConversationState(BaseModel):
     needs_slot_filling: bool = False
     waiting_for_background: bool = False
 
+    # Voice call indicator
+    is_voice_call: bool = False
+
     # Response to prepend (from notifications)
     prepend_message: Optional[str] = None
 
