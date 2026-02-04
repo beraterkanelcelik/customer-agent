@@ -58,6 +58,9 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./models:/app/models
+      # Persist ML model caches (Whisper, Kokoro, Spacy) - avoids re-download on restart
+      - ./cache/huggingface:/root/.cache/huggingface
+      - ./cache/torch:/root/.cache/torch
     depends_on:
       redis:
         condition: service_healthy

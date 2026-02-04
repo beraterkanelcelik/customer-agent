@@ -168,7 +168,7 @@ class AudioProcessor:
             voice: Voice override (default: KOKORO_VOICE from env)
 
         Returns:
-            Audio bytes (MP3 format for Twilio compatibility) or None on error
+            Audio bytes (WAV format, 24kHz) or None on error
         """
         if not text:
             return None
@@ -204,7 +204,7 @@ class AudioProcessor:
                 # Convert float32 to int16
                 audio_int16 = (full_audio * 32767).astype(np.int16)
 
-                # Create WAV
+                # Create WAV at native 24kHz (no MP3 conversion - better quality)
                 import wave
                 wav_buffer = io.BytesIO()
                 with wave.open(wav_buffer, 'wb') as wav:
@@ -213,19 +213,12 @@ class AudioProcessor:
                     wav.setframerate(self._tts_sample_rate)
                     wav.writeframes(audio_int16.tobytes())
 
-                wav_data = wav_buffer.getvalue()
-
-                # Convert to MP3 for Twilio compatibility
-                from pydub import AudioSegment
-                audio_segment = AudioSegment.from_wav(io.BytesIO(wav_data))
-                mp3_buffer = io.BytesIO()
-                audio_segment.export(mp3_buffer, format="mp3", bitrate="64k")
-                return mp3_buffer.getvalue()
+                return wav_buffer.getvalue()
 
             audio = await loop.run_in_executor(_executor, _synthesize)
 
             if audio:
-                logger.info(f"[TTS] Synthesized: '{text[:50]}...' ({len(audio)} bytes)")
+                logger.info(f"[TTS] Synthesized: '{text[:50]}...' ({len(audio)} bytes WAV)")
 
             return audio
 

@@ -42,15 +42,15 @@ class VoiceSettings(BaseSettings):
         default="sales_,human_,twilio_",
         description="Comma-separated prefixes that identify human participants"
     )
+    # These settings are no longer used - agent generates all messages via API
+    # Kept for backwards compatibility but values are ignored
     idle_resume_message: str = Field(
-        default="I'm back. How can I continue helping you?",
-        description="Message spoken when resuming from idle mode"
+        default="",
+        description="DEPRECATED: Agent generates this message via API"
     )
-
-    # Human handoff settings
     human_intro_message_template: str = Field(
-        default="Connecting you to a customer{customer_name}. They requested assistance.",
-        description="Template for message spoken to human when they join. Use {customer_name} placeholder."
+        default="",
+        description="DEPRECATED: Agent generates this message via API"
     )
 
     class Config:

@@ -27,15 +27,14 @@ class EndCallInput(BaseModel):
     """Input schema for end_call tool."""
     session_id: str = Field(description="The current session ID")
     farewell_message: str = Field(
-        default="Thank you for calling Springfield Auto. Have a great day!",
-        description="The farewell message to speak before ending the call"
+        description="The farewell message to speak before ending the call. Required - generate a warm goodbye."
     )
 
 
 @tool(args_schema=EndCallInput)
 def end_call(
     session_id: str,
-    farewell_message: str = "Thank you for calling Springfield Auto. Have a great day!"
+    farewell_message: str
 ) -> str:
     """End the voice call gracefully. Use when booking is complete or customer says goodbye."""
     _pending_call_actions[session_id] = {

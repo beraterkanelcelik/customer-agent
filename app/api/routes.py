@@ -152,7 +152,8 @@ async def chat(
     # Check for end_call action
     call_action = get_pending_call_action(request.session_id)
     if call_action and call_action.get("action") == "end_call":
-        farewell_message = call_action.get("farewell_message", "Thank you for calling. Goodbye!")
+        # Agent must provide farewell message via tool - no hardcoded fallback
+        farewell_message = call_action.get("farewell_message", "")
         await ws_manager.send_end_call(request.session_id, farewell_message)
 
     return response

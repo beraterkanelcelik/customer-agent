@@ -179,21 +179,11 @@ async def twilio_fallback_webhook(
 
 
 async def _send_call_failed_notification(session_id: str, status: str):
-    """Send notification when call fails to connect."""
-    status_messages = {
-        "busy": "The customer service line is busy right now.",
-        "no-answer": "No one answered at customer service.",
-        "failed": "The call to customer service couldn't be completed.",
-        "canceled": "The call to customer service was cancelled."
-    }
-
-    message = status_messages.get(status, "Unable to reach customer service.")
-    message += " I'll help you schedule a callback instead."
-
+    """Send notification when call fails to connect - no hardcoded message."""
     notification = Notification(
         notification_id=f"notif_cs_{int(datetime.utcnow().timestamp() * 1000)}",
         task_id=f"cs_{session_id}",
-        message=message,
+        data={"type": "call_failed", "status": status},  # Agent generates message
         priority=NotificationPriority.HIGH
     )
 
@@ -202,16 +192,11 @@ async def _send_call_failed_notification(session_id: str, status: str):
 
 
 async def _send_voicemail_notification(session_id: str, amd_result: str):
-    """Send notification when voicemail is detected."""
-    message = (
-        "I reached the customer service voicemail instead of a person. "
-        "Let me help you schedule a callback so someone can reach you directly."
-    )
-
+    """Send notification when voicemail is detected - no hardcoded message."""
     notification = Notification(
         notification_id=f"notif_vm_{int(datetime.utcnow().timestamp() * 1000)}",
         task_id=f"cs_{session_id}",
-        message=message,
+        data={"type": "voicemail_detected", "amd_result": amd_result},  # Agent generates message
         priority=NotificationPriority.HIGH
     )
 
@@ -220,15 +205,11 @@ async def _send_voicemail_notification(session_id: str, amd_result: str):
 
 
 async def _send_error_notification(session_id: str):
-    """Send notification when there's a call error."""
+    """Send notification when there's a call error - no hardcoded message."""
     notification = Notification(
         notification_id=f"notif_err_{int(datetime.utcnow().timestamp() * 1000)}",
         task_id=f"cs_{session_id}",
-        message=(
-            "I encountered an issue connecting to customer service. "
-            "Is there anything else I can help you with, or would you like me to "
-            "schedule a callback?"
-        ),
+        data={"type": "connection_error"},  # Agent generates message
         priority=NotificationPriority.HIGH
     )
 

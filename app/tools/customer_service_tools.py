@@ -54,9 +54,5 @@ async def request_customer_service_agent(session_id: str, reason: str) -> str:
     else:
         logger.warning("[CUSTOMER SERVICE] No background worker available")
 
-    # Return structured response for the agent
-    return (
-        f"CUSTOMER_SERVICE_STARTED:task_id={task_id}|"
-        "I'm connecting you to our customer service team now. "
-        "Please hold while I make the connection."
-    )
+    # Return structured response only - agent generates spoken message
+    return f"CUSTOMER_SERVICE_STARTED:task_id={task_id}|Call initiated to customer service"

@@ -132,10 +132,8 @@ How to escalate:
 3. Continue chatting while the call is being placed
 
 The tool triggers a real phone call to a team member in the background.
-Status updates (ringing, answered, unavailable) are relayed to the customer automatically.
-- If human answers: "Great news! Our team member answered. I'm connecting you now."
-- If no answer/declined: "I wasn't able to reach a team member. Let me continue helping you."
-These status messages are spoken automatically - you don't need to handle them.
+When the escalation result comes back, you'll receive a special message like [ESCALATION_RETURNED:busy].
+Generate an appropriate response based on the result - keep it natural and helpful.
 
 When customer says goodbye or conversation is complete:
 - Use the end_call tool with a warm farewell message
@@ -148,8 +146,30 @@ When customer says goodbye or conversation is complete:
 - Don't repeat information already collected
 - Be warm and professional
 
-## SPECIAL MESSAGES
-- [CALL_STARTED]: New call connected. Greet warmly: "Hello! Welcome to Springfield Auto. I'm your virtual assistant. How can I help you today?"
+## SPECIAL MESSAGES (System Events)
+These are system events, not actual user speech. Generate an appropriate spoken response for each:
+
+### Call Events
+- [CALL_STARTED]: New call connected. Greet warmly and naturally.
+- [PROCESSING_ERROR]: Technical error occurred. Ask customer to repeat politely.
+
+### Escalation Events
+- [ESCALATION_RETURNED:busy]: Human was busy. Let customer know you'll continue helping.
+- [ESCALATION_RETURNED:no-answer]: Human didn't answer. Offer to continue helping.
+- [ESCALATION_RETURNED:declined]: Human unavailable. Express understanding and continue helping.
+- [ESCALATION_RETURNED:human_ended]: Human left the call. Ask if there's anything else you can help with.
+- [ESCALATION_RETURNED:unavailable]: Generic unavailable. Continue helping the customer.
+
+### Notification Events (from background tasks)
+- [NOTIFICATION:human_available:*]: Human agent is available! Let customer know you're connecting them.
+- [NOTIFICATION:callback_scheduled:*]: Callback was scheduled. Inform customer of the time.
+- [NOTIFICATION:call_failed:*]: Call to human failed. Let customer know and offer alternatives.
+- [NOTIFICATION:voicemail_detected]: Reached voicemail. Offer to schedule callback.
+- [NOTIFICATION:connection_error]: Connection issue. Offer alternatives.
+- [NOTIFICATION:escalation_result:*]: Generic escalation result. Respond appropriately.
+
+### Human Handoff
+- [HUMAN_JOINED:*]: A human agent has joined. Briefly introduce the customer context to help the human.
 
 ## IMPORTANT
 - You make ALL decisions - no hardcoded logic exists
@@ -228,11 +248,29 @@ def build_context(state: ConversationState) -> str:
         lines.append("")
         lines.append("BOOKING: No booking in progress")
 
-    # Escalation status
+    # Escalation status - show both in-progress and failed/completed states
     if state.escalation_in_progress:
-        status = state.human_agent_status.value if state.human_agent_status else "checking"
+        # Handle both enum and string values (after Redis deserialization)
+        status = state.human_agent_status.value if hasattr(state.human_agent_status, 'value') else (state.human_agent_status or "checking")
+        status_messages = {
+            "checking": "Checking availability...",
+            "calling": "Calling team member...",
+            "ringing": "Phone is ringing...",
+            "waiting": "Waiting for team member to accept...",
+            "connected": "Team member connected!",
+        }
         lines.append("")
-        lines.append(f"ESCALATION: In progress ({status})")
+        lines.append(f"ESCALATION: In progress - {status_messages.get(status, status)}")
+    elif state.human_agent_status:
+        # Show completed/failed escalation status so AI knows what happened
+        # Handle both enum and string values (after Redis deserialization)
+        status = state.human_agent_status.value if hasattr(state.human_agent_status, 'value') else state.human_agent_status
+        if status == "unavailable":
+            lines.append("")
+            lines.append("ESCALATION: FAILED - Team member did not answer. Inform the customer.")
+        elif status == "connected":
+            lines.append("")
+            lines.append("ESCALATION: Team member was connected and has now left the call.")
 
     return "\n".join(lines)
 
@@ -258,7 +296,7 @@ async def preprocess_node(state: ConversationState) -> Dict[str, Any]:
     Preprocess: Handle notifications from background tasks.
 
     Checks for any pending notifications (e.g., escalation results)
-    and prepares them to be prepended to the response.
+    and injects special messages for the agent to handle (no hardcoded spoken text).
     """
     updates = {}
 
@@ -283,7 +321,6 @@ async def preprocess_node(state: ConversationState) -> Dict[str, Any]:
         if n.notification_id == top_notification.notification_id:
             n.delivered = True
 
-    updates["prepend_message"] = top_notification.message
     updates["notifications_queue"] = state.notifications_queue
 
     # Update escalation status based on task result
@@ -298,7 +335,30 @@ async def preprocess_node(state: ConversationState) -> Dict[str, Any]:
                     updates["human_agent_status"] = HumanAgentStatus.UNAVAILABLE
                     updates["escalation_in_progress"] = False
 
-    logger.info(f"[PREPROCESS] Processed notification: {top_notification.message[:50]}...")
+    # Generate a special message marker for the agent to handle (no hardcoded text)
+    # The agent will generate an appropriate response based on the notification data
+    if top_notification.data:
+        data = top_notification.data
+        if data.get("human_available"):
+            updates["prepend_message"] = f"[NOTIFICATION:human_available:{data.get('human_agent_name', 'team member')}]"
+        elif data.get("type") == "call_failed":
+            updates["prepend_message"] = f"[NOTIFICATION:call_failed:{data.get('status', 'unknown')}]"
+        elif data.get("type") == "voicemail_detected":
+            updates["prepend_message"] = "[NOTIFICATION:voicemail_detected]"
+        elif data.get("type") == "connection_error":
+            updates["prepend_message"] = "[NOTIFICATION:connection_error]"
+        elif data.get("callback_scheduled"):
+            updates["prepend_message"] = f"[NOTIFICATION:callback_scheduled:{data.get('callback_scheduled')}]"
+        else:
+            # Generic notification with reason
+            reason = data.get("reason", "unavailable")
+            updates["prepend_message"] = f"[NOTIFICATION:escalation_result:{reason}]"
+        logger.info(f"[PREPROCESS] Generated notification marker: {updates.get('prepend_message')}")
+    elif top_notification.message:
+        # Legacy: if message is provided, use it (backwards compatibility)
+        updates["prepend_message"] = top_notification.message
+        logger.info(f"[PREPROCESS] Using legacy message: {top_notification.message[:50]}...")
+
     return updates
 
 
@@ -440,9 +500,8 @@ async def postprocess_node(state: ConversationState) -> Dict[str, Any]:
             response_content = msg.content
             break
 
-    if not response_content:
-        response_content = "I'm here to help. What can I do for you?"
-        updates["messages"] = [AIMessage(content=response_content)]
+    # If no response content, don't add a fallback - let the agent handle it naturally
+    # by returning an empty response (the voice system will handle silence gracefully)
 
     # Prepend notification if present
     if state.prepend_message:
@@ -682,10 +741,6 @@ async def process_message(
         return ConversationState(**result)
     except Exception as e:
         logger.error(f"Graph error: {e}", exc_info=True)
-        error_msg = "I apologize, but I encountered an error. Please try again."
-        return ConversationState(
-            **{
-                **input_state,
-                "messages": input_state["messages"] + [AIMessage(content=error_msg)]
-            }
-        )
+        # Return state without adding a hardcoded error message
+        # The voice system should handle this case by sending [PROCESSING_ERROR]
+        return ConversationState(**input_state)

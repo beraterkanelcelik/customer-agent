@@ -45,7 +45,7 @@ async def search_faq(
         faqs = result.scalars().all()
 
         if not faqs:
-            return "NOT_FOUND: I don't have specific information about that. Would you like me to connect you with a team member?"
+            return "NOT_FOUND: No FAQ entry matches this query. Agent should respond appropriately."
 
         # Return best match
         best = faqs[0]

@@ -16,9 +16,14 @@ from typing import Optional
 from fastapi import APIRouter, Form, Query, Response, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
+from twilio.twiml.voice_response import VoiceResponse
+
+from app.config import get_settings
 from app.services.twilio_voice import twilio_voice, CallState, HumanCallStatus
 from app.background.state_store import state_store
 from app.api.websocket import get_ws_manager
+
+settings = get_settings()
 
 logger = logging.getLogger("app.api.voice")
 
@@ -104,7 +109,7 @@ async def escalate_to_conference(
 
 
 @router.post("/human-answer")
-async def human_answered(
+async def human_answer_webhook(
     session_id: str = Query(...),
     conference: str = Query(...),
     reason: str = Query("assistance"),
@@ -113,45 +118,173 @@ async def human_answered(
     CallStatus: str = Form(None)
 ):
     """
-    Called when the human agent answers the escalation call.
+    Called when Twilio connects the outbound call to human agent.
 
-    New flow:
-    1. Human answers -> this endpoint is called
-    2. We add human to conference (waiting for customer)
-    3. We queue "connecting you" message for customer
-    4. After delay (to let message play), transfer customer to conference
+    IMPORTANT: This fires when Twilio detects the call is "answered", but this
+    could be triggered by call screening or early media - NOT necessarily a real human!
+
+    New flow with confirmation:
+    1. Call connects (could be call screening) -> this endpoint is called
+    2. We return TwiML that asks "Press 1 to accept this call"
+    3. If human presses 1 -> /human-confirmed is called
+    4. Only THEN do we transfer customer to conference
     """
-    logger.info(f"[{session_id}] === HUMAN ANSWERED ===")
+    logger.info(f"[{session_id}] === HUMAN ANSWER WEBHOOK (waiting for confirmation) ===")
     logger.info(f"[{session_id}] Conference: {conference}, CallStatus: {CallStatus}, CallSid: {CallSid}")
     logger.info(f"[{session_id}] Reason: {reason}, CustomerName: {customer_name}")
 
-    # Notify dashboard
-    await dashboard_callback(session_id, {
-        "type": "human_answered",
-        "session_id": session_id,
-        "conference": conference
-    })
+    # DON'T notify dashboard as "answered" yet - wait for confirmation!
+    # The status callback will send "waiting_confirmation" status
 
-    # Transfer customer to conference after a delay
-    # This gives time for the "connecting you" message to be spoken
-    # The message is queued by update_human_call_status() when it sees "in-progress"
-    async def delayed_transfer():
-        # Wait for the "connecting you" message to play (~5 seconds for TTS)
-        await asyncio.sleep(5)
-        await twilio_voice.transfer_customer_to_conference(session_id)
-
-    asyncio.create_task(delayed_transfer())
-
-    # Generate TwiML to add human to conference
-    # Human enters conference first and waits briefly for customer
-    twiml = twilio_voice.generate_human_answer_twiml(
+    # Generate TwiML that asks human to press 1 to confirm
+    # This prevents call screening from falsely triggering transfer
+    twiml = twilio_voice.generate_human_confirmation_twiml(
         session_id=session_id,
         conference_name=conference,
         customer_name=customer_name,
         reason=reason
     )
 
+    logger.info(f"[{session_id}] Returning confirmation TwiML (press 1 to accept)")
     return Response(content=twiml, media_type="application/xml")
+
+
+@router.post("/human-amd")
+async def human_amd_result(
+    session_id: str = Query(...),
+    CallSid: str = Form(...),
+    AnsweredBy: str = Form(...),
+    MachineDetectionDuration: Optional[int] = Form(None)
+):
+    """
+    Handle AMD (Answering Machine Detection) result for human call.
+
+    AnsweredBy values:
+    - "human": Real person answered
+    - "machine_start": Machine/voicemail detected at start
+    - "machine_end_beep": Voicemail beep detected (ready to leave message)
+    - "machine_end_silence": Voicemail ended with silence
+    - "machine_end_other": Other machine detection
+    - "fax": Fax machine
+    - "unknown": Couldn't determine
+    """
+    logger.info(f"[{session_id}] AMD result: AnsweredBy={AnsweredBy}, Duration={MachineDetectionDuration}ms")
+
+    # If it's a machine/voicemail, hang up - no point leaving a message
+    is_machine = AnsweredBy.startswith("machine") or AnsweredBy == "fax"
+
+    if is_machine:
+        logger.info(f"[{session_id}] AMD detected machine/voicemail - call will play to voicemail then hang up")
+        # Update status to show it went to voicemail
+        await dashboard_callback(session_id, {
+            "type": "human_status",
+            "session_id": session_id,
+            "status": "voicemail"
+        })
+    elif AnsweredBy == "human":
+        logger.info(f"[{session_id}] AMD confirmed human answered")
+        # Human confirmed by AMD - the Gather TwiML should be playing now
+    else:
+        logger.info(f"[{session_id}] AMD result unknown: {AnsweredBy}")
+
+    return {"status": "ok", "answered_by": AnsweredBy}
+
+
+@router.post("/human-detected")
+async def human_detected(
+    session_id: str = Query(...),
+    conference: str = Query(...),
+    customer_name: str = Query("Customer"),
+    reason: str = Query("assistance"),
+    CallSid: str = Form(None),
+    Digits: str = Form(None)
+):
+    """
+    Called when someone presses ANY key - proves a human is on the line.
+
+    This defeats call screening because:
+    - Call screening just records and never presses keys
+    - Real humans hear "press any key" and do so
+
+    Now we play the full message and ask them to press 1 to accept.
+    """
+    logger.info(f"[{session_id}] === HUMAN DETECTED (pressed: {Digits}) ===")
+
+    # Update status - we know a human is there now
+    await dashboard_callback(session_id, {
+        "type": "human_status",
+        "session_id": session_id,
+        "status": "waiting_confirmation"
+    })
+
+    # Now play the full message and ask for confirmation
+    response = VoiceResponse()
+
+    confirm_url = (
+        f"{settings.twilio_webhook_base_url}/api/voice/human-confirmed"
+        f"?session_id={session_id}&conference={conference}"
+    )
+
+    from twilio.twiml.voice_response import Gather
+    gather = Gather(
+        num_digits=1,
+        action=confirm_url,
+        method="POST",
+        timeout=10
+    )
+    gather.say(
+        f"You have an incoming customer call. {customer_name} needs help with {reason}. "
+        "Press 1 to accept, or any other key to decline.",
+        voice="Polly.Matthew"
+    )
+    response.append(gather)
+
+    # If no response, hang up
+    response.say("No response. Goodbye.", voice="Polly.Matthew")
+    response.hangup()
+
+    return Response(content=str(response), media_type="application/xml")
+
+
+@router.post("/human-confirmed")
+async def human_confirmed(
+    session_id: str = Query(...),
+    conference: str = Query(...),
+    CallSid: str = Form(None),
+    Digits: str = Form(None)
+):
+    """
+    Called when human presses a digit to accept or decline the call.
+    """
+    logger.info(f"[{session_id}] === HUMAN CONFIRMATION: {Digits} ===")
+
+    if Digits == "1":
+        # Human accepted!
+        logger.info(f"[{session_id}] Human pressed 1 - ACCEPTED! Connecting to conference")
+
+        # Update status and trigger customer transfer
+        await twilio_voice.handle_human_confirmed(session_id)
+
+        # Generate TwiML to add human to conference
+        twiml = twilio_voice.generate_human_join_conference_twiml(
+            session_id=session_id,
+            conference_name=conference
+        )
+
+        return Response(content=twiml, media_type="application/xml")
+    else:
+        # Human declined
+        logger.info(f"[{session_id}] Human pressed '{Digits}' - DECLINED")
+
+        # Update state and notify dashboard (this also clears escalation state)
+        await twilio_voice.handle_human_declined(session_id)
+
+        # Hang up the human call
+        response = VoiceResponse()
+        response.say("Call declined. Goodbye.", voice="Polly.Matthew")
+        response.hangup()
+
+        return Response(content=str(response), media_type="application/xml")
 
 
 @router.post("/human-status")
@@ -181,30 +314,33 @@ async def human_call_status(
 @router.post("/return-to-ai")
 async def return_to_ai(
     session_id: str = Query(...),
-    message: str = Query("I'm sorry, a team member isn't available right now. Let me continue helping you."),
+    reason: str = Query("unavailable"),
     CallSid: str = Form(None)
 ):
     """
     Return customer to AI conversation after escalation fails or human is unavailable.
 
     This endpoint is called when we need to redirect the customer from conference back to AI.
+    No hardcoded messages - AI agent handles all responses.
     """
-    logger.info(f"[{session_id}] Returning to AI conversation")
+    logger.info(f"[{session_id}] Returning to AI conversation (reason: {reason})")
 
     # Update call state
     call = twilio_voice.get_call_by_session(session_id)
     if call:
         call.state = CallState.AI_CONVERSATION
         call.conference_name = None
+        call.escalation_return_reason = reason
 
     # Notify dashboard
     await dashboard_callback(session_id, {
         "type": "returned_to_ai",
-        "session_id": session_id
+        "session_id": session_id,
+        "reason": reason
     })
 
-    # Generate TwiML to reconnect to AI
-    twiml = twilio_voice.generate_return_to_ai_twiml(session_id, message)
+    # Generate TwiML to reconnect to AI - no hardcoded message
+    twiml = twilio_voice.generate_return_to_ai_twiml(session_id)
     return Response(content=twiml, media_type="application/xml")
 
 
@@ -262,6 +398,78 @@ async def call_status(
 
 # ==================== Media Stream WebSocket ====================
 
+async def event_poller(websocket: WebSocket, stream_sid: str, session_id: str):
+    """
+    Background task that polls for pending events (like escalation status changes)
+    and triggers proactive AI responses.
+
+    This allows the AI to speak to the customer without waiting for their input.
+    """
+    from app.services.audio_processor import audio_processor
+    from app.services.conversation import conversation_service
+    from starlette.websockets import WebSocketState
+
+    logger.info(f"[{session_id}] Event poller started")
+
+    try:
+        while True:
+            await asyncio.sleep(1)  # Check every second
+
+            # Check if websocket is still connected
+            if websocket.client_state != WebSocketState.CONNECTED:
+                logger.info(f"[{session_id}] Event poller: WebSocket disconnected, stopping")
+                break
+
+            # Check for pending events
+            event = twilio_voice.pop_pending_event(session_id)
+            if event:
+                event_type = event.get("type", "")
+                event_message = event.get("message", "")
+
+                logger.info(f"[{session_id}] Event poller: Processing event {event_type}: {event_message[:50]}...")
+
+                try:
+                    # Process through AI to generate natural response
+                    result = await conversation_service.process_voice_message(
+                        session_id=session_id,
+                        user_message=event_message  # e.g., "[ESCALATION_RETURNED:no-answer]"
+                    )
+                    response_text = result.get("response", "")
+
+                    if response_text:
+                        logger.info(f"[{session_id}] Event poller: AI response: '{response_text[:50]}...'")
+
+                        # Get call for transcript
+                        call = twilio_voice.get_call_by_session(session_id)
+                        if call:
+                            from datetime import datetime
+                            call.transcript.append({
+                                "role": "assistant",
+                                "content": response_text,
+                                "timestamp": datetime.utcnow().isoformat()
+                            })
+                            await dashboard_callback(session_id, {
+                                "type": "transcript",
+                                "role": "assistant",
+                                "content": response_text
+                            })
+
+                        # Synthesize and send audio
+                        response_audio = await audio_processor.synthesize(response_text)
+                        if response_audio and stream_sid:
+                            await send_audio_to_stream(websocket, stream_sid, response_audio, session_id)
+                            logger.info(f"[{session_id}] Event poller: Proactive message sent")
+                except Exception as e:
+                    logger.error(f"[{session_id}] Event poller error processing event: {e}")
+
+    except asyncio.CancelledError:
+        logger.info(f"[{session_id}] Event poller cancelled")
+    except Exception as e:
+        logger.error(f"[{session_id}] Event poller error: {e}")
+    finally:
+        logger.info(f"[{session_id}] Event poller stopped")
+
+
 @router.websocket("/media-stream")
 async def media_stream_websocket(websocket: WebSocket):
     """
@@ -275,6 +483,7 @@ async def media_stream_websocket(websocket: WebSocket):
     stream_sid = None
     call_sid = None
     session_id = None
+    event_poller_task = None
 
     try:
         async for message in websocket.iter_text():
@@ -325,59 +534,86 @@ async def media_stream_websocket(websocket: WebSocket):
                     from datetime import datetime
 
                     if is_resumed:
-                        # Resumed session - send a "I'm back" message
-                        # The message was already spoken by TwiML, so we just need to
-                        # send a short prompt to continue the conversation
+                        # Resumed session - let AI agent generate appropriate response
+                        # based on the escalation_return_reason
                         logger.info(f"[{session_id}] Session resumed from escalation")
-                        resume_text = "How else can I help you today?"
 
-                        # Add to transcript
-                        call.transcript.append({
-                            "role": "assistant",
-                            "content": resume_text,
-                            "timestamp": datetime.utcnow().isoformat()
-                        })
-                        await dashboard_callback(session_id, {
-                            "type": "transcript",
-                            "role": "assistant",
-                            "content": resume_text
-                        })
+                        # Get the return reason from the call
+                        return_reason = call.escalation_return_reason or "unavailable"
 
-                        # Synthesize and send
-                        resume_audio = await audio_processor.synthesize(resume_text)
-                        if resume_audio:
-                            await send_audio_to_stream(websocket, stream_sid, resume_audio, session_id)
+                        # Let the agent generate the appropriate response
+                        try:
+                            result = await conversation_service.process_voice_message(
+                                session_id=session_id,
+                                user_message=f"[ESCALATION_RETURNED:{return_reason}]"  # Special marker for agent
+                            )
+                            resume_text = result.get("response", "")
+                        except Exception as e:
+                            logger.error(f"[{session_id}] Failed to generate resume message: {e}")
+                            resume_text = ""
+
+                        if resume_text:
+                            # Add to transcript
+                            call.transcript.append({
+                                "role": "assistant",
+                                "content": resume_text,
+                                "timestamp": datetime.utcnow().isoformat()
+                            })
+                            await dashboard_callback(session_id, {
+                                "type": "transcript",
+                                "role": "assistant",
+                                "content": resume_text
+                            })
+
+                            # Synthesize and send
+                            resume_audio = await audio_processor.synthesize(resume_text)
+                            if resume_audio:
+                                await send_audio_to_stream(websocket, stream_sid, resume_audio, session_id)
+
+                        # Clear the return reason after handling
+                        call.escalation_return_reason = None
                     else:
                         # New session - generate welcome message through the agent
+                        # No hardcoded fallback - agent must generate all messages
                         try:
                             result = await conversation_service.process_voice_message(
                                 session_id=session_id,
                                 user_message="[CALL_STARTED]"  # Special marker for initial greeting
                             )
-                            welcome_text = result.get("response", "Hello! Welcome to Springfield Auto. How can I help you today?")
+                            welcome_text = result.get("response", "")
                         except Exception as e:
                             logger.error(f"[{session_id}] Failed to generate welcome: {e}")
-                            welcome_text = "Hello! Welcome to Springfield Auto. How can I help you today?"
+                            welcome_text = ""
 
-                        # Add to local transcript for dashboard display
-                        call.transcript.append({
-                            "role": "assistant",
-                            "content": welcome_text,
-                            "timestamp": datetime.utcnow().isoformat()
-                        })
-                        await dashboard_callback(session_id, {
-                            "type": "transcript",
-                            "role": "assistant",
-                            "content": welcome_text
-                        })
+                        if welcome_text:
+                            # Add to local transcript for dashboard display
+                            call.transcript.append({
+                                "role": "assistant",
+                                "content": welcome_text,
+                                "timestamp": datetime.utcnow().isoformat()
+                            })
+                            await dashboard_callback(session_id, {
+                                "type": "transcript",
+                                "role": "assistant",
+                                "content": welcome_text
+                            })
 
-                        # Synthesize welcome message (using Kokoro with default voice)
-                        welcome_audio = await audio_processor.synthesize(welcome_text)
-                        if welcome_audio:
-                            # Send audio back to Twilio
-                            await send_audio_to_stream(websocket, stream_sid, welcome_audio, session_id)
+                            # Synthesize welcome message (using Kokoro with default voice)
+                            welcome_audio = await audio_processor.synthesize(welcome_text)
+                            if welcome_audio:
+                                # Send audio back to Twilio
+                                await send_audio_to_stream(websocket, stream_sid, welcome_audio, session_id)
+                            else:
+                                logger.error(f"[{session_id}] Failed to synthesize welcome audio")
                         else:
-                            logger.error(f"[{session_id}] Failed to synthesize welcome audio")
+                            logger.warning(f"[{session_id}] Agent returned empty welcome message")
+
+                    # Start event poller to handle proactive messages (escalation results, etc.)
+                    if event_poller_task is None:
+                        event_poller_task = asyncio.create_task(
+                            event_poller(websocket, stream_sid, session_id)
+                        )
+                        logger.info(f"[{session_id}] Event poller task started")
 
             elif event == "media":
                 # Audio data received
@@ -386,28 +622,16 @@ async def media_stream_websocket(websocket: WebSocket):
 
                 if payload and stream_sid:
                     try:
-                        # Check for pending events first (real-time status updates)
-                        # These trigger immediately with barge-in support
-                        while twilio_voice.has_pending_events(session_id):
-                            event_data = twilio_voice.pop_pending_event(session_id)
-                            if event_data:
-                                logger.info(f"[{session_id}] Processing pending event: {event_data['type']}")
-                                await process_event_message(websocket, stream_sid, session_id, event_data)
-
                         # Process audio chunk (VAD + STT + LLM + TTS)
+                        # All messages are generated by the AI agent - no hardcoded messages
                         response_audio = await twilio_voice.process_audio_chunk(stream_sid, payload)
 
                         if response_audio:
                             # Send response audio back to Twilio (with barge-in support)
                             result = await send_audio_to_stream(websocket, stream_sid, response_audio, session_id)
                             if result == "barged_in":
-                                # Audio was interrupted, process pending events
-                                logger.info(f"[{session_id}] Audio barged-in, processing events")
+                                logger.info(f"[{session_id}] Audio barged-in by user")
                                 twilio_voice.clear_barge_in(session_id)
-                                while twilio_voice.has_pending_events(session_id):
-                                    event_data = twilio_voice.pop_pending_event(session_id)
-                                    if event_data:
-                                        await process_event_message(websocket, stream_sid, session_id, event_data)
                             elif not result:
                                 logger.warning(f"[{session_id}] Failed to send response audio")
 
@@ -420,7 +644,7 @@ async def media_stream_websocket(websocket: WebSocket):
                                 await twilio_voice.end_call(session_id)
                     except Exception as e:
                         logger.error(f"[{session_id}] Error processing audio: {e}")
-                        # Try to send an error message to the user
+                        # Let agent handle error - no hardcoded error message
                         await send_error_audio(websocket, stream_sid, session_id)
 
             elif event == "stop":
@@ -440,10 +664,33 @@ async def media_stream_websocket(websocket: WebSocket):
                 break
 
     except WebSocketDisconnect:
-        logger.info(f"[{session_id}] WebSocket disconnected")
+        logger.info(f"[{session_id}] WebSocket disconnected unexpectedly")
+        # Customer likely hung up - notify dashboard
+        if session_id:
+            await dashboard_callback(session_id, {
+                "type": "call_ended",
+                "session_id": session_id,
+                "reason": "customer_disconnected"
+            })
     except Exception as e:
         logger.error(f"[{session_id}] WebSocket error: {e}", exc_info=True)
+        # Also notify dashboard on errors
+        if session_id:
+            await dashboard_callback(session_id, {
+                "type": "call_ended",
+                "session_id": session_id,
+                "reason": "error"
+            })
     finally:
+        # Cancel the event poller task if running
+        if event_poller_task is not None:
+            event_poller_task.cancel()
+            try:
+                await event_poller_task
+            except asyncio.CancelledError:
+                pass
+            logger.info(f"[{session_id}] Event poller task cancelled")
+
         # Only cleanup the call if we're not in an escalation scenario
         # During escalation, the call continues in conference and we need to track it
         if call_sid:
@@ -452,6 +699,13 @@ async def media_stream_websocket(websocket: WebSocket):
                 logger.info(f"[{session_id}] Stream ended but call in conference, not cleaning up")
             else:
                 twilio_voice.cleanup_call(call_sid)
+                # Send call_ended if not already sent by stop event or exception handlers
+                if session_id:
+                    await dashboard_callback(session_id, {
+                        "type": "call_ended",
+                        "session_id": session_id,
+                        "reason": "stream_ended"
+                    })
         logger.info(f"[{session_id}] Media stream ended")
 
 
@@ -460,12 +714,12 @@ async def send_audio_to_stream(websocket: WebSocket, stream_sid: str, audio_data
     Send audio data to Twilio media stream with barge-in support.
 
     Twilio expects mulaw 8kHz audio in base64.
-    The audio_data is MP3, so we need to convert it.
+    The audio_data is WAV (24kHz), converted using high-quality soxr resampling.
 
     Returns True if audio was sent successfully, "barged_in" if interrupted.
     """
     try:
-        # Convert MP3 to mulaw using pydub (if available) or ffmpeg
+        # Convert WAV to mulaw using high-quality soxr resampling
         mulaw_audio = await convert_to_mulaw(audio_data)
 
         if not mulaw_audio:
@@ -538,94 +792,79 @@ async def send_audio_to_stream(websocket: WebSocket, stream_sid: str, audio_data
 
 async def send_error_audio(websocket: WebSocket, stream_sid: str, session_id: str):
     """
-    Send an error message audio to the user when processing fails.
+    Handle error during processing - let agent generate response.
+    No hardcoded messages.
     """
     try:
         from app.services.audio_processor import audio_processor
-        error_text = "I'm sorry, I had trouble processing that. Could you please repeat?"
-        error_audio = await audio_processor.synthesize(error_text)
-        if error_audio:
-            await send_audio_to_stream(websocket, stream_sid, error_audio, session_id)
+        from app.services.conversation import conversation_service
+
+        # Let agent generate error response
+        result = await conversation_service.process_voice_message(
+            session_id=session_id,
+            user_message="[PROCESSING_ERROR]"  # Special marker for agent
+        )
+        error_text = result.get("response", "")
+
+        if error_text:
+            error_audio = await audio_processor.synthesize(error_text)
+            if error_audio:
+                await send_audio_to_stream(websocket, stream_sid, error_audio, session_id)
     except Exception as e:
-        logger.error(f"[{session_id}] Failed to send error audio: {e}")
+        logger.error(f"[{session_id}] Failed to handle error: {e}")
 
 
-async def process_event_message(websocket: WebSocket, stream_sid: str, session_id: str, event_data: dict):
+
+
+async def convert_to_mulaw(wav_data: bytes) -> Optional[bytes]:
     """
-    Process a real-time event and speak it to the customer.
+    Convert WAV (24kHz) to mulaw 8kHz for Twilio using high-quality resampling.
 
-    This is used for immediate notifications like human call status updates.
-    The message is spoken directly without going through the full LLM pipeline.
+    Uses soxr for high-quality resampling and audioop for mulaw encoding.
+    This avoids the quality loss from MP3 intermediate conversion.
     """
-    from app.services.audio_processor import audio_processor
-    from datetime import datetime
+    import io
+    import wave
+    import audioop
+    import numpy as np
+    import soxr
 
-    event_type = event_data.get("type", "unknown")
-    message = event_data.get("message", "")
-
-    if not message:
-        logger.warning(f"[{session_id}] Event {event_type} has no message, skipping")
-        return
-
-    logger.info(f"[{session_id}] Speaking event message: {message[:50]}...")
-
-    # Get call for transcript updates
-    call = twilio_voice.get_call_by_session(session_id)
-
-    # Add to transcript
-    if call:
-        call.transcript.append({
-            "role": "assistant",
-            "content": f"[{event_type}] {message}",
-            "timestamp": datetime.utcnow().isoformat()
-        })
-
-    # Notify dashboard
-    await dashboard_callback(session_id, {
-        "type": "event_message",
-        "event_type": event_type,
-        "session_id": session_id,
-        "content": message
-    })
-
-    # Synthesize and speak
     try:
-        audio = await audio_processor.synthesize(message)
-        if audio:
-            await send_audio_to_stream(websocket, stream_sid, audio, session_id)
-        else:
-            logger.error(f"[{session_id}] Failed to synthesize event message")
-    except Exception as e:
-        logger.error(f"[{session_id}] Error processing event message: {e}")
+        # Parse WAV and extract PCM samples
+        with io.BytesIO(wav_data) as wav_buffer:
+            with wave.open(wav_buffer, 'rb') as wav:
+                source_sample_rate = wav.getframerate()
+                n_channels = wav.getnchannels()
+                sample_width = wav.getsampwidth()
+                frames = wav.readframes(wav.getnframes())
 
+        # Convert to numpy array
+        audio_int16 = np.frombuffer(frames, dtype=np.int16)
 
-async def convert_to_mulaw(mp3_data: bytes) -> Optional[bytes]:
-    """
-    Convert MP3 to mulaw 8kHz for Twilio.
+        # If stereo, convert to mono
+        if n_channels == 2:
+            audio_int16 = audio_int16.reshape(-1, 2).mean(axis=1).astype(np.int16)
 
-    Uses pydub if available, otherwise falls back to audioop.
-    """
-    try:
-        # Try using pydub (requires ffmpeg)
-        from pydub import AudioSegment
-        import io
+        # Convert to float64 for high-quality resampling
+        audio_float = audio_int16.astype(np.float64)
 
-        # Load MP3
-        audio = AudioSegment.from_mp3(io.BytesIO(mp3_data))
+        # High-quality resample to 8kHz using soxr
+        audio_8k = soxr.resample(audio_float, source_sample_rate, 8000, quality='HQ')
 
-        # Convert to 8kHz mono
-        audio = audio.set_frame_rate(8000).set_channels(1)
+        # Normalize to prevent clipping
+        max_val = np.max(np.abs(audio_8k))
+        if max_val > 0:
+            audio_8k = audio_8k * (32767 / max_val) * 0.95  # Leave headroom
 
-        # Export as raw mulaw
-        mulaw_buffer = io.BytesIO()
-        audio.export(mulaw_buffer, format="mulaw", codec="pcm_mulaw")
-        mulaw_buffer.seek(0)
+        # Convert back to int16
+        audio_8k_int16 = audio_8k.astype(np.int16)
 
-        return mulaw_buffer.read()
+        # Encode to mulaw using audioop
+        mulaw_data = audioop.lin2ulaw(audio_8k_int16.tobytes(), 2)
 
-    except ImportError:
-        logger.warning("pydub not available, audio conversion may not work")
-        return None
+        logger.debug(f"Converted {len(wav_data)} bytes WAV ({source_sample_rate}Hz) -> {len(mulaw_data)} bytes mulaw (8kHz)")
+        return mulaw_data
+
     except Exception as e:
         logger.error(f"Audio conversion error: {e}")
         return None

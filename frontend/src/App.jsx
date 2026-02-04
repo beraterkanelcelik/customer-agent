@@ -4,7 +4,6 @@ import { Phone, PhoneOff, GitBranch, PhoneCall, PhoneIncoming } from 'lucide-rea
 import Transcript from './components/Transcript'
 import AgentState from './components/AgentState'
 import CustomerInfo from './components/CustomerInfo'
-import TaskMonitor from './components/TaskMonitor'
 import BookingSlots from './components/BookingSlots'
 import AvailabilityCalendar from './components/AvailabilityCalendar'
 import { useWebSocket } from './hooks/useWebSocket'
@@ -29,7 +28,6 @@ export default function App() {
   const [bookingSlots, setBookingSlots] = useState({})
   const [confirmedAppointment, setConfirmedAppointment] = useState(null)
   const [bookingInProgress, setBookingInProgress] = useState(false)
-  const [pendingTasks, setPendingTasks] = useState([])
   const [error, setError] = useState(null)
   const [latency, setLatency] = useState(null)
   const [notifications, setNotifications] = useState([])
@@ -130,7 +128,12 @@ export default function App() {
       case 'call_ended':
         setIsCallActive(false)
         setCallState('idle')
-        // Keep transcript and state for review
+        // Clear escalation state but keep transcript and other state for review
+        setAgentState(prev => ({
+          ...prev,
+          escalationInProgress: false,
+          humanAgentStatus: null
+        }))
         break
 
       case 'call_ending':
@@ -165,9 +168,9 @@ export default function App() {
         break
 
       case 'human_status':
-        // Twilio call status updates (initiated, ringing, no-answer, etc.)
-        const isTerminalStatus = ['no-answer', 'busy', 'failed', 'returned_to_ai'].includes(data.status)
-        const isInProgressStatus = ['initiated', 'calling', 'ringing', 'answered'].includes(data.status)
+        // Twilio call status updates (initiated, ringing, waiting_confirmation, confirmed, no-answer, canceled, etc.)
+        const isTerminalStatus = ['no-answer', 'busy', 'failed', 'canceled', 'returned_to_ai', 'declined', 'voicemail'].includes(data.status)
+        const isInProgressStatus = ['initiated', 'calling', 'ringing', 'waiting_confirmation', 'confirmed'].includes(data.status)
         setAgentState(prev => ({
           ...prev,
           // Only keep escalation in progress for active statuses
@@ -179,7 +182,7 @@ export default function App() {
           setTimeout(() => {
             setAgentState(prev => {
               // Only clear if still showing the same terminal status
-              if (['no-answer', 'busy', 'failed', 'returned_to_ai'].includes(prev.humanAgentStatus)) {
+              if (['no-answer', 'busy', 'failed', 'canceled', 'returned_to_ai', 'declined', 'voicemail'].includes(prev.humanAgentStatus)) {
                 return { ...prev, humanAgentStatus: null }
               }
               return prev
@@ -190,14 +193,22 @@ export default function App() {
 
       // Standard state events
       case 'state_update':
-        setAgentState(prev => ({
-          ...prev,
-          currentAgent: data.current_agent ?? prev.currentAgent,
-          intent: data.intent ?? prev.intent,
-          confidence: data.confidence ?? prev.confidence,
-          escalationInProgress: data.escalation_in_progress ?? prev.escalationInProgress,
-          humanAgentStatus: data.human_agent_status ?? prev.humanAgentStatus
-        }))
+        setAgentState(prev => {
+          const escalationInProgress = data.escalation_in_progress ?? prev.escalationInProgress
+          // Clear human status if escalation is not in progress and status is null/none
+          let humanStatus = data.human_agent_status ?? prev.humanAgentStatus
+          if (!escalationInProgress && (data.human_agent_status === null || data.human_agent_status === 'none')) {
+            humanStatus = null
+          }
+          return {
+            ...prev,
+            currentAgent: data.current_agent ?? prev.currentAgent,
+            intent: data.intent ?? prev.intent,
+            confidence: data.confidence ?? prev.confidence,
+            escalationInProgress,
+            humanAgentStatus: humanStatus
+          }
+        })
         if (data.customer) setCustomer(data.customer)
         if (data.booking_slots) {
           setBookingSlots(data.booking_slots)
@@ -210,7 +221,6 @@ export default function App() {
           setConfirmedAppointment(data.confirmed_appointment)
           setBookingInProgress(false)
         }
-        if (data.pending_tasks) setPendingTasks(data.pending_tasks)
         if (data.intent === 'book_service' || data.intent === 'book_test_drive') {
           setBookingInProgress(true)
         }
@@ -229,13 +239,6 @@ export default function App() {
         } else {
           setCallState('ai_conversation')
         }
-        break
-
-      case 'task_update':
-        setPendingTasks(prev => {
-          const updated = prev.filter(t => t.task_id !== data.task.task_id)
-          return [...updated, data.task]
-        })
         break
 
       case 'notification':
@@ -474,9 +477,8 @@ export default function App() {
             <BookingSlots slots={bookingSlots} confirmedAppointment={confirmedAppointment} intent={agentState.intent} bookingInProgress={bookingInProgress} />
           </div>
 
-          {/* Right: Customer, Tasks & Availability */}
+          {/* Right: Customer & Availability */}
           <div className="col-span-3 space-y-6">
-            <TaskMonitor tasks={pendingTasks} />
             <CustomerInfo customer={customer} />
             <AvailabilityCalendar
               appointmentType={bookingSlots?.appointment_type}

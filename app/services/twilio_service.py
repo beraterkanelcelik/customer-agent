@@ -333,32 +333,15 @@ class TwilioService:
         customer_name = pending.customer_name if pending else "A customer"
         reason = pending.reason if pending else "assistance"
 
-        # Use Polly neural voice for natural speech (much better than 'alice')
-        # Available neural voices: Polly.Joanna-Neural, Polly.Matthew-Neural, Polly.Amy-Neural
-        voice = "Polly.Joanna-Neural"
-
         # Check if SIP is configured
         if not self.is_sip_configured:
             logger.warning(f"[{session_id}] SIP not configured, using fallback TwiML")
-            # Fallback: Just inform the agent and gather info
-            return f"""<?xml version="1.0" encoding="UTF-8"?>
+            # Fallback: No voice message, just hang up
+            # The AI agent will handle informing the customer
+            return """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="{voice}">
-        Hello! This is an automated call from Springfield Auto.
-        {customer_name} needs help with {reason}.
-        The session ID is {session_id}.
-        Please call them back or check the dashboard for details.
-        Thank you!
-    </Say>
-    <Pause length="2"/>
     <Hangup/>
 </Response>"""
-
-        # Build intro message
-        intro = (
-            f"Hello! {customer_name} at Springfield Auto needs help with {reason}. "
-            "Please hold while I connect you."
-        )
 
         # Build SIP URI for LiveKit
         # Format: sip:{session_id}@{livekit_sip_host}
@@ -371,12 +354,10 @@ class TwilioService:
         logger.info(f"[{session_id}] SIP Username: {settings.livekit_sip_trunk_username}")
         logger.info(f"[{session_id}] Customer: {customer_name}, Reason: {reason}")
 
-        # Build TwiML with SIP bridge
+        # Build TwiML with SIP bridge - no hardcoded voice messages
         # IMPORTANT: No extra whitespace in SIP URI - Twilio is sensitive to this
         twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="{voice}">{intro}</Say>
-    <Pause length="1"/>
     <Dial>
         <Sip username="{settings.livekit_sip_trunk_username}" password="{settings.livekit_sip_trunk_password}">{sip_uri}</Sip>
     </Dial>
@@ -396,10 +377,9 @@ class TwilioService:
 </Response>"""
 
     def generate_fallback_twiml(self) -> str:
-        """Generate TwiML for error fallback."""
+        """Generate TwiML for error fallback - no hardcoded messages."""
         return """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Joanna-Neural">We're sorry, there was an error connecting. Please try again later.</Say>
     <Hangup/>
 </Response>"""
 

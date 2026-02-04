@@ -40,7 +40,8 @@ class Notification(BaseModel):
     """Notification from background task."""
     notification_id: str = Field(..., examples=["notif_1706789000123"])
     task_id: str
-    message: str
+    message: Optional[str] = None  # Optional - agent generates message from data
+    data: Optional[Dict[str, Any]] = None  # Raw result data for agent context
     priority: NotificationPriority
     delivered: bool = False
     created_at: datetime = Field(default_factory=datetime.utcnow)

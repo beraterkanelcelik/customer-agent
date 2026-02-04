@@ -46,7 +46,8 @@ class HumanCallStatus(str, Enum):
     NONE = "none"
     CALLING = "calling"
     RINGING = "ringing"
-    ANSWERED = "answered"  # Human answered, ready to transfer
+    WAITING_CONFIRMATION = "waiting_confirmation"  # Call connected, waiting for human to press 1
+    CONFIRMED = "confirmed"  # Human pressed 1, ready to transfer
     IN_CONFERENCE = "in_conference"  # Customer transferred to conference
     FAILED = "failed"
     COMPLETED = "completed"
@@ -73,6 +74,7 @@ class ActiveCall:
     # Human escalation tracking (customer stays with AI until human ready)
     human_call_status: HumanCallStatus = HumanCallStatus.NONE
     escalation_reason: Optional[str] = None
+    escalation_return_reason: Optional[str] = None  # Reason for returning from escalation
     human_status_message: Optional[str] = None  # Status message for AI to relay
     # Event queue for real-time notifications (barge-in support)
     pending_events: deque = field(default_factory=deque)
@@ -214,18 +216,59 @@ class TwilioVoiceService:
 
         return str(response)
 
-    def generate_human_answer_twiml(self, session_id: str, conference_name: str,
-                                     customer_name: str, reason: str) -> str:
-        """Generate TwiML for when human agent answers."""
+    def generate_human_confirmation_twiml(self, session_id: str, conference_name: str,
+                                          customer_name: str, reason: str) -> str:
+        """
+        Generate TwiML that defeats call screening by requiring DTMF input.
+
+        Strategy:
+        1. Play message IMMEDIATELY (no delays - call screening hangs up fast!)
+        2. Wait for ANY keypress (call screening won't press keys)
+        3. If key pressed → human confirmed → play details and connect
+        4. If no key → call screening/voicemail → hang up
+
+        Critical timing: Must speak within 500ms or call screening records silence and hangs up.
+        """
+        from twilio.twiml.voice_response import Gather
+
         response = VoiceResponse()
 
-        response.say(
-            f"Hello! You have a customer{' named ' + customer_name if customer_name else ''} "
-            f"who needs help with {reason}. Connecting you now.",
-            voice="Polly.Joanna-Neural"
+        # URL for when human presses any key (proves they're human)
+        human_detected_url = (
+            f"{settings.twilio_webhook_base_url}/api/voice/human-detected"
+            f"?session_id={session_id}&conference={conference_name}"
+            f"&customer_name={quote(customer_name)}&reason={quote(reason)}"
         )
 
-        # Add human to same conference
+        # CRITICAL: Start speaking IMMEDIATELY - no pauses, no dots
+        # Call screening only waits ~1-2 seconds before hanging up
+        gather = Gather(
+            num_digits=1,
+            action=human_detected_url,
+            method="POST",
+            timeout=10,
+            finish_on_key=""  # Any key works
+        )
+        # Speak the message right away - urgent and clear
+        # Repeat twice to ensure human hears it if they picked up mid-ring
+        gather.say(
+            "Incoming customer call. Press any key to accept. "
+            "Press any key to accept the call.",
+            voice="Polly.Matthew"
+        )
+        response.append(gather)
+
+        # If no input after timeout, likely call screening or voicemail - hang up
+        response.hangup()
+
+        return str(response)
+
+    def generate_human_join_conference_twiml(self, session_id: str, conference_name: str) -> str:
+        """Generate TwiML to add confirmed human to conference."""
+        response = VoiceResponse()
+
+        response.say("Connecting you to the customer now.", voice="Polly.Matthew")
+
         dial = Dial()
         dial.conference(
             conference_name,
@@ -242,13 +285,11 @@ class TwilioVoiceService:
         Generate TwiML to return customer to AI conversation after failed escalation.
 
         This creates a new media stream connection so the AI can resume the conversation.
+        No hardcoded messages - the AI agent will generate appropriate responses.
         """
         response = VoiceResponse()
 
-        # Optional message before reconnecting
-        if message:
-            response.say(message, voice="Polly.Joanna-Neural")
-
+        # No hardcoded message - AI agent will handle the conversation
         # Reconnect to our media stream for AI conversation
         connect = Connect()
         stream = Stream(
@@ -267,6 +308,7 @@ class TwilioVoiceService:
         Return customer from conference back to AI conversation.
 
         Called when human agent is unavailable or declines the call.
+        No hardcoded messages - AI agent handles all responses.
         """
         logger.info(f"[{session_id}] === RETURN TO AI REQUESTED === reason={reason}")
         call = self.get_call_by_session(session_id)
@@ -281,26 +323,15 @@ class TwilioVoiceService:
         logger.info(f"[{session_id}] Found call: call_sid={call.call_sid}, state={call.state}")
 
         try:
-            # Generate appropriate message based on reason
-            if reason == "busy":
-                message = "I apologize, our team member is currently on another call. Let me continue to help you."
-            elif reason == "no-answer":
-                message = "I wasn't able to reach a team member right now. Let me continue to help you."
-            elif reason == "declined":
-                message = "Our team member is not available at the moment. I'll do my best to assist you."
-            elif reason == "human_ended":
-                message = "It looks like our team member had to step away. Is there anything else I can help you with?"
-            else:
-                message = "I'm sorry, a team member isn't available right now. Let me continue helping you."
-
             # Update call state
             call.state = CallState.AI_CONVERSATION
             call.conference_name = None
             call.human_call_sid = None
+            # Store the reason so AI agent can access it and generate appropriate response
+            call.escalation_return_reason = reason
 
-            # Redirect customer back to AI (URL encode the message)
-            encoded_message = quote(message)
-            redirect_url = f"{settings.twilio_webhook_base_url}/api/voice/return-to-ai?session_id={session_id}&message={encoded_message}"
+            # Redirect customer back to AI - no hardcoded message
+            redirect_url = f"{settings.twilio_webhook_base_url}/api/voice/return-to-ai?session_id={session_id}&reason={reason}"
             logger.info(f"[{session_id}] Redirecting call {call.call_sid} to: {redirect_url}")
 
             self.client.calls(call.call_sid).update(
@@ -455,7 +486,7 @@ class TwilioVoiceService:
             )
             timings["llm_ms"] = int((time.time() - llm_start) * 1000)
 
-            ai_response = result.get("response", "I'm sorry, could you repeat that?")
+            ai_response = result.get("response", "")
             needs_escalation = result.get("needs_escalation", False)
             escalation_reason = result.get("escalation_reason", "assistance")
             should_end = result.get("should_end", False)
@@ -469,7 +500,15 @@ class TwilioVoiceService:
         except Exception as e:
             timings["llm_ms"] = int((time.time() - llm_start) * 1000)
             logger.error(f"[{call.session_id}] LLM error: {e}")
-            ai_response = "I'm sorry, I had trouble processing that. Could you repeat?"
+            # Let agent generate error response - no hardcoded message
+            try:
+                error_result = await conversation_service.process_voice_message(
+                    session_id=call.session_id,
+                    user_message="[PROCESSING_ERROR]"
+                )
+                ai_response = error_result.get("response", "")
+            except Exception:
+                ai_response = ""  # No response if agent also fails
             needs_escalation = False
             result = {}  # Ensure result is empty dict on error
 
@@ -510,13 +549,18 @@ class TwilioVoiceService:
 
         # Send state_update with booking slots, customer info, etc.
         # This ensures the UI updates in real-time after each turn
+        # Only send human_agent_status if there's an actual escalation (not "none")
+        human_status = None
+        if call.human_call_status and call.human_call_status != HumanCallStatus.NONE:
+            human_status = call.human_call_status.value
+
         logger.info(f"[{call.session_id}] Sending state_update to dashboard: customer_data={customer_data}, booking_slots={result.get('booking_slots')}")
         await self._notify_dashboard(call, "state_update", {
             "current_agent": "unified",
             "intent": result.get("intent"),
             "confidence": 0.9,
             "escalation_in_progress": needs_escalation,
-            "human_agent_status": call.human_call_status.value if call.human_call_status else None,
+            "human_agent_status": human_status,
             "booking_slots": result.get("booking_slots"),
             "confirmed_appointment": result.get("confirmed_appointment"),
             "customer": customer_data,
@@ -688,8 +732,21 @@ class TwilioVoiceService:
         Update human call status based on Twilio webhook.
         Called from /human-status endpoint.
 
-        Queues events for real-time notification with barge-in support.
+        Updates both:
+        1. In-memory ActiveCall state
+        2. Redis ConversationState (so AI agent knows the status)
+        3. Dashboard via WebSocket
+
+        Flow with confirmation:
+        1. initiated -> calling
+        2. ringing -> ringing
+        3. in-progress -> waiting_confirmation (human/call-screening answered, waiting for press 1)
+        4. (human presses 1) -> confirmed (via /human-confirmed endpoint)
+        5. completed -> handles various end states
         """
+        from app.background.state_store import state_store
+        from app.schemas.enums import HumanAgentStatus as StateHumanAgentStatus
+
         call = self.get_call_by_session(session_id)
         if not call:
             logger.warning(f"[{session_id}] Cannot update human status - call not found")
@@ -698,9 +755,9 @@ class TwilioVoiceService:
         old_status = call.human_call_status
         logger.info(f"[{session_id}] Human call status update: {status} (was {old_status.value})")
 
-        event_message = None
         # Use specific status for frontend display (more granular than internal enum)
         frontend_status = status
+        escalation_in_progress = True  # Default to true, set false on terminal states
 
         if status == "initiated":
             call.human_call_status = HumanCallStatus.CALLING
@@ -709,69 +766,186 @@ class TwilioVoiceService:
         elif status == "ringing":
             call.human_call_status = HumanCallStatus.RINGING
             frontend_status = "ringing"
-            # No verbal announcement - just update status silently for dashboard
 
         elif status == "in-progress":
-            # Human answered! Now transfer customer to conference
-            call.human_call_status = HumanCallStatus.ANSWERED
-            frontend_status = "answered"
-            event_message = "Great news! Our team member answered. I'm connecting you now."
-            logger.info(f"[{session_id}] Human answered - will transfer customer to conference")
-            # Transfer is handled by the human-answer TwiML which adds human to conference
-            # We'll transfer customer when we detect this status
+            # Call connected - but could be call screening or early media!
+            # Don't assume human answered. The /human-answer endpoint will play
+            # "press 1 to accept" and we'll update to CONFIRMED when they do.
+            call.human_call_status = HumanCallStatus.WAITING_CONFIRMATION
+            frontend_status = "waiting_confirmation"
+            logger.info(f"[{session_id}] Call connected - waiting for human to press 1 to confirm")
 
         elif status in ("busy", "no-answer", "failed", "canceled"):
             call.human_call_status = HumanCallStatus.FAILED
-            # Keep specific status for frontend (no-answer, busy, failed)
-            frontend_status = status if status in ("busy", "no-answer") else "failed"
-            if status == "busy":
-                event_message = "I'm sorry, our team member is currently on another call. I'll keep helping you."
-            elif status == "no-answer":
-                event_message = "Our team member didn't answer. Let me continue assisting you."
-            else:
-                event_message = "I wasn't able to reach a team member right now. How else can I help you?"
+            # Keep specific status for frontend (no-answer, busy, canceled, failed)
+            frontend_status = status if status in ("busy", "no-answer", "canceled") else "failed"
             # Reset escalation state so customer can try again later
             call.escalation_reason = None
+            call.human_call_sid = None
+            call.conference_name = None
+            escalation_in_progress = False
+            logger.info(f"[{session_id}] Human call failed with status: {status}")
+            # Queue event so AI can inform customer proactively
+            self.queue_event(session_id, "escalation_failed", f"[ESCALATION_RETURNED:{frontend_status}]")
 
         elif status == "completed":
             if call.human_call_status == HumanCallStatus.IN_CONFERENCE:
                 # Human hung up after being in conference - return customer to AI
                 call.human_call_status = HumanCallStatus.COMPLETED
                 frontend_status = "returned_to_ai"
-                event_message = "Our team member had to go. I'm back to help you. Is there anything else you need?"
+                escalation_in_progress = False
                 logger.info(f"[{session_id}] Human completed - returning customer to AI")
                 await self.return_to_ai_conversation(session_id, reason="human_ended")
-            elif call.human_call_status == HumanCallStatus.ANSWERED:
-                # Human hung up before customer was transferred (quick hangup)
+            elif call.human_call_status == HumanCallStatus.CONFIRMED:
+                # Human hung up after confirming but before conference (quick hangup)
                 call.human_call_status = HumanCallStatus.FAILED
                 frontend_status = "failed"
-                event_message = "Our team member had to step away. Let me continue helping you."
+                escalation_in_progress = False
                 call.escalation_reason = None
+                # Queue event so AI can inform customer proactively
+                self.queue_event(session_id, "escalation_failed", "[ESCALATION_RETURNED:failed]")
+            elif call.human_call_status == HumanCallStatus.WAITING_CONFIRMATION:
+                # Human (or call screening) didn't press 1 - treat as no answer
+                # This happens when human declines by hanging up during the Gather prompt
+                call.human_call_status = HumanCallStatus.FAILED
+                frontend_status = "no-answer"
+                escalation_in_progress = False
+                call.escalation_reason = None
+                logger.info(f"[{session_id}] Human did not confirm (no press 1) - treating as no-answer")
+                # Queue event so AI can inform customer proactively
+                self.queue_event(session_id, "escalation_failed", "[ESCALATION_RETURNED:no-answer]")
 
-        # Queue event for real-time notification (triggers barge-in if audio playing)
-        if event_message:
-            call.human_status_message = event_message
-            self.queue_event(session_id, "human_status_update", event_message)
+        # Update conversation state in Redis so AI agent knows the status
+        try:
+            state = await state_store.get_state(session_id)
+            if state:
+                # Map frontend status to HumanAgentStatus enum
+                status_mapping = {
+                    "calling": StateHumanAgentStatus.CALLING,
+                    "ringing": StateHumanAgentStatus.RINGING,
+                    "waiting_confirmation": StateHumanAgentStatus.WAITING,
+                    "confirmed": StateHumanAgentStatus.CONNECTED,
+                    "connected": StateHumanAgentStatus.CONNECTED,
+                    "no-answer": StateHumanAgentStatus.UNAVAILABLE,
+                    "busy": StateHumanAgentStatus.UNAVAILABLE,
+                    "failed": StateHumanAgentStatus.UNAVAILABLE,
+                    "returned_to_ai": StateHumanAgentStatus.UNAVAILABLE,
+                }
+                state.human_agent_status = status_mapping.get(frontend_status)
+                state.escalation_in_progress = escalation_in_progress
+                await state_store.set_state(session_id, state)
+                logger.info(f"[{session_id}] Updated Redis state: human_agent_status={state.human_agent_status}, escalation_in_progress={escalation_in_progress}")
+        except Exception as e:
+            logger.error(f"[{session_id}] Failed to update Redis state: {e}")
 
         # Send real-time update to frontend dashboard
         logger.info(f"[{session_id}] Sending human_status to dashboard: {frontend_status}")
         await self._notify_dashboard(call, "human_status", {
-            "status": frontend_status,
-            "message": event_message
+            "status": frontend_status
         })
+
+    async def handle_human_declined(self, session_id: str) -> bool:
+        """
+        Handle human pressing a key other than 1 (declining the call).
+
+        This resets the escalation state so the customer can continue with AI
+        and potentially try again later.
+        """
+        from app.background.state_store import state_store
+        from app.schemas.enums import HumanAgentStatus as StateHumanAgentStatus
+
+        call = self.get_call_by_session(session_id)
+        if not call:
+            logger.warning(f"[{session_id}] Cannot handle decline - call not found")
+            return False
+
+        logger.info(f"[{session_id}] Human declined the call")
+
+        # Reset call state
+        call.human_call_status = HumanCallStatus.FAILED
+        call.escalation_reason = None
+        call.human_call_sid = None
+        call.conference_name = None
+
+        # Update Redis state so AI knows escalation failed
+        try:
+            state = await state_store.get_state(session_id)
+            if state:
+                state.human_agent_status = StateHumanAgentStatus.UNAVAILABLE
+                state.escalation_in_progress = False
+                await state_store.set_state(session_id, state)
+                logger.info(f"[{session_id}] Updated Redis state: human declined, escalation cleared")
+        except Exception as e:
+            logger.error(f"[{session_id}] Failed to update Redis state: {e}")
+
+        # Notify dashboard
+        await self._notify_dashboard(call, "human_status", {
+            "status": "declined"
+        })
+
+        # Queue event so AI can inform customer proactively
+        self.queue_event(session_id, "escalation_failed", "[ESCALATION_RETURNED:declined]")
+
+        return True
+
+    async def handle_human_confirmed(self, session_id: str) -> bool:
+        """
+        Handle human pressing 1 to confirm they want to take the call.
+
+        Returns True if confirmation was successful.
+        """
+        from app.background.state_store import state_store
+        from app.schemas.enums import HumanAgentStatus as StateHumanAgentStatus
+
+        call = self.get_call_by_session(session_id)
+        if not call:
+            logger.warning(f"[{session_id}] Cannot confirm human - call not found")
+            return False
+
+        if call.human_call_status != HumanCallStatus.WAITING_CONFIRMATION:
+            logger.warning(f"[{session_id}] Unexpected confirmation - status was {call.human_call_status}")
+
+        call.human_call_status = HumanCallStatus.CONFIRMED
+        logger.info(f"[{session_id}] Human confirmed! Will transfer customer to conference")
+
+        # Update Redis state so AI knows
+        try:
+            state = await state_store.get_state(session_id)
+            if state:
+                state.human_agent_status = StateHumanAgentStatus.CONNECTED
+                state.escalation_in_progress = True
+                await state_store.set_state(session_id, state)
+                logger.info(f"[{session_id}] Updated Redis state: human confirmed")
+        except Exception as e:
+            logger.error(f"[{session_id}] Failed to update Redis state: {e}")
+
+        # Notify dashboard
+        await self._notify_dashboard(call, "human_status", {
+            "status": "confirmed"
+        })
+
+        # Now transfer customer to conference
+        # Small delay to let the "connecting you" message play on human's end
+        async def delayed_transfer():
+            await asyncio.sleep(2)  # Shorter delay since human is already confirmed
+            await self.transfer_customer_to_conference(session_id)
+
+        asyncio.create_task(delayed_transfer())
+
+        return True
 
     async def transfer_customer_to_conference(self, session_id: str) -> bool:
         """
         Transfer customer from AI conversation to conference with human.
-        Called when human is ready and customer should be transferred.
+        Called when human has CONFIRMED (pressed 1) and customer should be transferred.
         """
         call = self.get_call_by_session(session_id)
         if not call or not self.client:
             logger.warning(f"[{session_id}] Cannot transfer - call not found or Twilio not configured")
             return False
 
-        if call.human_call_status != HumanCallStatus.ANSWERED:
-            logger.warning(f"[{session_id}] Cannot transfer - human not ready (status: {call.human_call_status})")
+        if call.human_call_status != HumanCallStatus.CONFIRMED:
+            logger.warning(f"[{session_id}] Cannot transfer - human not confirmed (status: {call.human_call_status})")
             return False
 
         conference_name = call.conference_name
@@ -790,9 +964,10 @@ class TwilioVoiceService:
                 method="POST"
             )
 
-            await self._notify_dashboard(call, "escalation", {
-                "status": "transferred",
-                "conference": conference_name
+            # Send human_status with "connected" - don't send escalation event
+            # which would reset the status display
+            await self._notify_dashboard(call, "human_status", {
+                "status": "connected"
             })
 
             return True
@@ -800,24 +975,22 @@ class TwilioVoiceService:
         except Exception as e:
             logger.error(f"[{session_id}] Failed to transfer customer: {e}")
             call.human_call_status = HumanCallStatus.FAILED
-            call.human_status_message = "I had trouble connecting you. Let me continue helping instead."
             return False
 
     async def _start_human_call_background(self, call: ActiveCall, reason: str):
         """
         Start calling human agent in background.
-        Customer stays in AI conversation until human answers.
+        Customer stays in AI conversation until human confirms (presses 1).
+        No hardcoded messages - AI agent handles all responses.
         """
         if not self.client or not settings.customer_service_phone:
             logger.error(f"[{call.session_id}] Cannot escalate - not configured")
             call.human_call_status = HumanCallStatus.FAILED
-            call.human_status_message = "I'm sorry, I can't connect you to a team member right now."
             return
 
         conference_name = f"support_{call.session_id}"
         call.conference_name = conference_name
         call.human_call_status = HumanCallStatus.CALLING
-        call.human_status_message = "I'm calling one of our team members now..."
 
         logger.info(f"[{call.session_id}] Starting human call to {settings.customer_service_phone}")
 
@@ -827,14 +1000,21 @@ class TwilioVoiceService:
 
         try:
             # Only call the human - DON'T redirect customer yet
-            # Customer stays talking to AI until human answers
+            # Customer stays talking to AI until human CONFIRMS
+            #
+            # Two-step DTMF confirmation defeats call screening:
+            # 1. Play "press any key" - call screening won't press anything
+            # 2. If key pressed, play details and ask for "1" to accept
+            # 3. If "1" pressed, transfer customer to conference
             human_call = self.client.calls.create(
                 to=settings.customer_service_phone,
                 from_=settings.twilio_phone_number,
                 url=f"{settings.twilio_webhook_base_url}/api/voice/human-answer?session_id={call.session_id}&conference={conference_name}&reason={encoded_reason}&customer_name={encoded_customer_name}",
                 status_callback=f"{settings.twilio_webhook_base_url}/api/voice/human-status?session_id={call.session_id}",
+                # Event names: initiated, ringing, answered, completed
+                # Note: "answered" event sends CallStatus="in-progress" in the callback
                 status_callback_event=["initiated", "ringing", "answered", "completed"],
-                timeout=30
+                timeout=45  # Give more time for the two-step confirmation
             )
 
             call.human_call_sid = human_call.sid
@@ -845,10 +1025,123 @@ class TwilioVoiceService:
                 "human_call_sid": human_call.sid
             })
 
+            # Start a watchdog task to check for stalled/missed status callbacks
+            asyncio.create_task(self._human_call_watchdog(call.session_id, human_call.sid))
+
         except Exception as e:
             logger.error(f"[{call.session_id}] Failed to call human: {e}")
             call.human_call_status = HumanCallStatus.FAILED
-            call.human_status_message = "I had trouble reaching our team. Let me continue helping you."
+
+    async def _human_call_watchdog(self, session_id: str, human_call_sid: str):
+        """
+        Watchdog task that monitors human call status and handles cases where
+        Twilio doesn't send status callbacks (e.g., quickly declined calls).
+
+        Checks the call status via REST API if no progress is made.
+        """
+        WATCHDOG_CHECK_INTERVAL = 5  # Check every 5 seconds
+        WATCHDOG_TIMEOUT = 60  # Total timeout
+        RINGING_TIMEOUT = 30  # Max time to stay in ringing state
+
+        start_time = datetime.utcnow()
+        last_status = None
+        ringing_start_time = None
+
+        while True:
+            await asyncio.sleep(WATCHDOG_CHECK_INTERVAL)
+
+            call = self.get_call_by_session(session_id)
+            if not call:
+                logger.info(f"[{session_id}] Watchdog: Call no longer exists, stopping")
+                break
+
+            current_status = call.human_call_status
+            elapsed = (datetime.utcnow() - start_time).total_seconds()
+
+            # Track when we started ringing
+            if current_status == HumanCallStatus.RINGING and ringing_start_time is None:
+                ringing_start_time = datetime.utcnow()
+
+            # If status changed to a terminal state, we're done
+            if current_status in (HumanCallStatus.FAILED, HumanCallStatus.COMPLETED,
+                                  HumanCallStatus.IN_CONFERENCE, HumanCallStatus.CONFIRMED):
+                logger.info(f"[{session_id}] Watchdog: Human call reached terminal state: {current_status.value}")
+                break
+
+            # Check for ringing timeout (call might have been declined without callback)
+            if ringing_start_time:
+                ringing_elapsed = (datetime.utcnow() - ringing_start_time).total_seconds()
+                if ringing_elapsed > RINGING_TIMEOUT:
+                    logger.warning(f"[{session_id}] Watchdog: Ringing timeout ({ringing_elapsed:.0f}s) - checking call status via API")
+                    await self._check_and_update_call_status(session_id, human_call_sid)
+                    break
+
+            # Check total timeout
+            if elapsed > WATCHDOG_TIMEOUT:
+                logger.warning(f"[{session_id}] Watchdog: Total timeout ({elapsed:.0f}s) - checking call status via API")
+                await self._check_and_update_call_status(session_id, human_call_sid)
+                break
+
+            # If status hasn't changed for a while and we're in CALLING state, check via API
+            if current_status == HumanCallStatus.CALLING and elapsed > 15:
+                logger.info(f"[{session_id}] Watchdog: Still in CALLING state after {elapsed:.0f}s, checking via API")
+                await self._check_and_update_call_status(session_id, human_call_sid)
+                # Don't break - let the status update trigger the appropriate action
+
+            last_status = current_status
+
+        logger.info(f"[{session_id}] Watchdog: Stopped monitoring human call")
+
+    async def _check_and_update_call_status(self, session_id: str, human_call_sid: str):
+        """
+        Check the actual call status via Twilio REST API and update our state.
+        Used when we suspect a status callback was missed.
+        """
+        if not self.client:
+            logger.error(f"[{session_id}] Cannot check call status - Twilio client not configured")
+            return
+
+        try:
+            # Fetch the call status from Twilio
+            twilio_call = self.client.calls(human_call_sid).fetch()
+            status = twilio_call.status
+
+            logger.info(f"[{session_id}] Watchdog: Twilio API reports call status: {status}")
+
+            call = self.get_call_by_session(session_id)
+            if not call:
+                return
+
+            # Map Twilio status to our handling
+            # Twilio statuses: queued, ringing, in-progress, completed, busy, failed, no-answer, canceled
+            if status in ("busy", "no-answer", "failed", "canceled", "completed"):
+                # Call ended - determine why
+                if status == "completed" and call.human_call_status == HumanCallStatus.IN_CONFERENCE:
+                    # Normal completion after conference
+                    logger.info(f"[{session_id}] Watchdog: Call completed normally after conference")
+                else:
+                    # Call failed or was declined
+                    logger.warning(f"[{session_id}] Watchdog: Call ended with status '{status}' - marking as failed")
+
+                    # Update status (this also notifies dashboard and updates Redis)
+                    await self.update_human_call_status(session_id, status, None)
+            elif status == "in-progress":
+                # Call is connected but we might have missed the callback
+                if call.human_call_status not in (HumanCallStatus.WAITING_CONFIRMATION,
+                                                   HumanCallStatus.CONFIRMED,
+                                                   HumanCallStatus.IN_CONFERENCE):
+                    logger.info(f"[{session_id}] Watchdog: Call is in-progress but status is {call.human_call_status.value}")
+                    await self.update_human_call_status(session_id, "in-progress", None)
+            elif status == "ringing":
+                # Still ringing - update if needed
+                if call.human_call_status != HumanCallStatus.RINGING:
+                    await self.update_human_call_status(session_id, "ringing", None)
+            elif status == "queued":
+                # Still queued - call hasn't started yet
+                logger.info(f"[{session_id}] Watchdog: Call still queued")
+
+        except Exception as e:
+            logger.error(f"[{session_id}] Watchdog: Failed to check call status: {e}")
 
 
 # Global singleton

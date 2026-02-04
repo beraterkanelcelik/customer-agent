@@ -119,10 +119,8 @@ class BackgroundWorker:
                 estimated_wait="connecting now"
             )
 
-            message = (
-                f"Great news! {result.human_agent_name} from our sales team is available now. "
-                "I'm connecting you to them right now."
-            )
+            # No hardcoded message - agent will generate response based on notification data
+            message = None
             priority = NotificationPriority.INTERRUPT
 
             # Signal voice worker about incoming human
@@ -144,18 +142,10 @@ class BackgroundWorker:
             decline_reason = response.get("reason", "unavailable")
             callback_time = self._get_next_callback_slot()
 
-            if decline_reason == "no_sales_online":
-                reason_text = "No sales representatives are currently online"
-            elif decline_reason == "timeout":
-                reason_text = "Sales representatives are busy with other customers"
-            elif decline_reason == "declined":
-                reason_text = "Sales representatives are currently unavailable"
-            else:
-                reason_text = "All team members are currently helping other customers"
-
+            # Store the reason for agent context
             result = HumanCheckResult(
                 human_available=False,
-                reason=reason_text,
+                reason=decline_reason,
                 callback_scheduled=callback_time,
                 email_sent=True
             )
@@ -168,11 +158,8 @@ class BackgroundWorker:
                 reason=reason
             )
 
-            message = (
-                f"I wasn't able to reach a team member right now - {reason_text.lower()}. "
-                f"I've scheduled a callback for {callback_time} and sent you a confirmation email. "
-                f"Someone will definitely call you then. Is there anything else I can help with in the meantime?"
-            )
+            # No hardcoded message - agent will generate response based on notification data
+            message = None
             priority = NotificationPriority.HIGH
 
         # Update task as completed
@@ -187,11 +174,11 @@ class BackgroundWorker:
         })
         await self._broadcast_task_update(session_id, task_id)
 
-        # Create and send notification
+        # Create and send notification with result data (no hardcoded message)
         notification = Notification(
             notification_id=f"notif_{int(datetime.utcnow().timestamp() * 1000)}",
             task_id=task_id,
-            message=message,
+            data=result.model_dump(),  # Pass raw data for agent to generate message
             priority=priority
         )
 

@@ -41,9 +41,5 @@ async def request_human_agent(session_id: str, reason: str) -> str:
     # The voice service will see needs_escalation=True and start calling CUSTOMER_SERVICE_PHONE
     logger.info(f"[ESCALATION] Task ID: {task_id} - Twilio voice service will handle the call")
 
-    # Return structured response - voice service will initiate phone call
-    return (
-        f"ESCALATION_STARTED:task_id={task_id}|"
-        "I'm calling one of our team members right now. "
-        "You can keep talking to me while I try to reach them."
-    )
+    # Return structured response only - agent generates spoken message
+    return f"ESCALATION_STARTED:task_id={task_id}|Call initiated to team member"

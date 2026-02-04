@@ -34,8 +34,16 @@ const HUMAN_STATUS_CONFIG = {
     textColor: 'text-indigo-300',
     iconColor: 'text-indigo-400'
   },
-  answered: {
-    label: 'Human answered, connecting...',
+  waiting_confirmation: {
+    label: 'Waiting for agent to accept...',
+    icon: Clock,
+    bgColor: 'bg-yellow-900/30',
+    borderColor: 'border-yellow-700',
+    textColor: 'text-yellow-300',
+    iconColor: 'text-yellow-400'
+  },
+  confirmed: {
+    label: 'Agent accepted, connecting...',
     icon: UserCheck,
     bgColor: 'bg-green-900/30',
     borderColor: 'border-green-700',
@@ -74,6 +82,22 @@ const HUMAN_STATUS_CONFIG = {
     textColor: 'text-yellow-300',
     iconColor: 'text-yellow-400'
   },
+  voicemail: {
+    label: 'Went to voicemail',
+    icon: XCircle,
+    bgColor: 'bg-orange-900/30',
+    borderColor: 'border-orange-700',
+    textColor: 'text-orange-300',
+    iconColor: 'text-orange-400'
+  },
+  declined: {
+    label: 'Agent declined call',
+    icon: XCircle,
+    bgColor: 'bg-orange-900/30',
+    borderColor: 'border-orange-700',
+    textColor: 'text-orange-300',
+    iconColor: 'text-orange-400'
+  },
   failed: {
     label: 'Could not connect',
     icon: XCircle,
@@ -81,6 +105,14 @@ const HUMAN_STATUS_CONFIG = {
     borderColor: 'border-red-700',
     textColor: 'text-red-300',
     iconColor: 'text-red-400'
+  },
+  canceled: {
+    label: 'Call rejected',
+    icon: XCircle,
+    bgColor: 'bg-orange-900/30',
+    borderColor: 'border-orange-700',
+    textColor: 'text-orange-300',
+    iconColor: 'text-orange-400'
   },
   returned_to_ai: {
     label: 'Returned to AI assistant',
@@ -171,8 +203,9 @@ export default function AgentState({ state }) {
           </div>
         )}
 
-        {/* Escalation Status - show when in progress OR when there's a recent status */}
-        {(state.escalationInProgress || state.humanAgentStatus) && (
+        {/* Escalation Status - only show when actively escalating or has meaningful status */}
+        {/* Don't show for "none" or null/undefined status unless escalation is in progress */}
+        {(state.escalationInProgress || (state.humanAgentStatus && state.humanAgentStatus !== 'none')) && (
           <EscalationStatus status={state.humanAgentStatus} />
         )}
       </div>
@@ -186,7 +219,7 @@ function EscalationStatus({ status }) {
   const statusKey = status || 'checking'
   const config = HUMAN_STATUS_CONFIG[statusKey] || HUMAN_STATUS_CONFIG.checking
   const IconComponent = config.icon
-  const isInProgress = ['checking', 'calling', 'ringing'].includes(statusKey)
+  const isInProgress = ['checking', 'calling', 'ringing', 'waiting_confirmation'].includes(statusKey)
 
   return (
     <div className={`${config.bgColor} border ${config.borderColor} rounded-lg p-3`}>

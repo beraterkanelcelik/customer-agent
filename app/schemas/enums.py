@@ -65,11 +65,14 @@ class NotificationPriority(str, Enum):
 
 
 class HumanAgentStatus(str, Enum):
-    """Human agent availability status."""
-    CHECKING = "checking"
-    AVAILABLE = "available"
-    UNAVAILABLE = "unavailable"
-    CONNECTED = "connected"
+    """Human agent availability status for escalation tracking."""
+    CHECKING = "checking"      # Initial state
+    CALLING = "calling"        # Outbound call initiated
+    RINGING = "ringing"        # Phone is ringing
+    WAITING = "waiting"        # Call connected, waiting for human to confirm
+    AVAILABLE = "available"    # Human confirmed availability
+    UNAVAILABLE = "unavailable"  # Human not available (no-answer, busy, failed)
+    CONNECTED = "connected"    # Human connected to customer
 
 
 class MessageRole(str, Enum):
