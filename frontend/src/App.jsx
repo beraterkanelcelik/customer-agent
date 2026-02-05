@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { Phone, PhoneOff, GitBranch, PhoneCall, PhoneIncoming } from 'lucide-react'
+import { Phone, PhoneOff, GitBranch, PhoneCall, PhoneIncoming, Waves } from 'lucide-react'
 import Transcript from './components/Transcript'
 import AgentState from './components/AgentState'
 import CustomerInfo from './components/CustomerInfo'
@@ -308,106 +308,113 @@ export default function App() {
 
   const getCallStateDisplay = () => {
     switch (callState) {
-      case 'connecting': return { text: 'Connecting...', color: 'text-yellow-400', bg: 'bg-yellow-900/50' }
-      case 'ai_conversation': return { text: 'AI Speaking', color: 'text-green-400', bg: 'bg-green-900/50' }
-      case 'processing': return { text: 'Processing...', color: 'text-blue-400', bg: 'bg-blue-900/50' }
-      case 'escalating': return { text: 'Escalating', color: 'text-orange-400', bg: 'bg-orange-900/50' }
-      case 'in_conference': return { text: 'Human Connected', color: 'text-purple-400', bg: 'bg-purple-900/50' }
-      case 'ended': return { text: 'Ending...', color: 'text-gray-400', bg: 'bg-gray-700/50' }
-      default: return { text: 'Ready', color: 'text-gray-400', bg: 'bg-gray-800' }
+      case 'connecting': return { text: 'Connecting...', color: 'text-warning-600', bg: 'bg-warning-50', border: 'border-warning-200' }
+      case 'ai_conversation': return { text: 'AI Speaking', color: 'text-success-600', bg: 'bg-success-50', border: 'border-success-200' }
+      case 'processing': return { text: 'Processing...', color: 'text-soft-600', bg: 'bg-soft-50', border: 'border-soft-200' }
+      case 'escalating': return { text: 'Escalating', color: 'text-warning-600', bg: 'bg-warning-50', border: 'border-warning-200' }
+      case 'in_conference': return { text: 'Human Connected', color: 'text-accent-600', bg: 'bg-accent-50', border: 'border-accent-200' }
+      case 'ended': return { text: 'Ending...', color: 'text-slate-500', bg: 'bg-slate-50', border: 'border-slate-200' }
+      default: return { text: 'Ready', color: 'text-slate-500', bg: 'bg-white/60', border: 'border-surface-300' }
     }
   }
 
   const callStateDisplay = getCallStateDisplay()
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-950">
+    <div className="min-h-screen relative">
       {/* Header */}
-      <header className="bg-gray-900/80 backdrop-blur-lg border-b border-gray-800/50 px-6 py-4 sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center text-xl shadow-lg shadow-indigo-500/20">
-              🚗
-            </div>
-            <div>
-              <h1 className="text-xl font-bold bg-gradient-to-r from-white to-gray-300 bg-clip-text text-transparent">
-                Springfield Auto
-              </h1>
-              <p className="text-sm text-gray-400">Voice Agent Dashboard</p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-4">
-            {/* Agent Flow Diagram Link */}
-            <Link
-              to="/flow"
-              className="flex items-center gap-2 px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors"
-            >
-              <GitBranch size={16} />
-              <span>Agent Flow</span>
-            </Link>
-
-            {/* Latency Display */}
-            {isCallActive && latency && (
-              <div className="flex items-center gap-3 px-4 py-2 rounded-lg bg-gray-800 text-xs">
-                <div className="flex flex-col items-center">
-                  <span className="text-gray-400">STT</span>
-                  <span className="text-blue-400 font-mono">{latency.stt_ms}ms</span>
+      <header className="glass-card-solid sticky top-0 z-40 border-b border-surface-300/50">
+        <div className="max-w-7xl mx-auto px-6 py-4">
+          <div className="flex items-center justify-between">
+            {/* Logo Section */}
+            <div className="flex items-center gap-4 animate-fade-in">
+              <div className="relative">
+                <div className="w-12 h-12 bg-gradient-to-br from-accent-400 to-soft-500 rounded-2xl flex items-center justify-center shadow-soft">
+                  <span className="text-2xl">🚗</span>
                 </div>
-                <div className="flex flex-col items-center">
-                  <span className="text-gray-400">LLM</span>
-                  <span className="text-purple-400 font-mono">{latency.llm_ms}ms</span>
-                </div>
-                <div className="flex flex-col items-center">
-                  <span className="text-gray-400">TTS</span>
-                  <span className="text-green-400 font-mono">{latency.tts_ms}ms</span>
-                </div>
-                <div className="flex flex-col items-center border-l border-gray-700 pl-3">
-                  <span className="text-gray-400">Total</span>
-                  <span className={`font-mono font-bold ${
-                    latency.total_ms < 3000 ? 'text-green-400' :
-                    latency.total_ms < 6000 ? 'text-yellow-400' : 'text-red-400'
-                  }`}>{(latency.total_ms / 1000).toFixed(1)}s</span>
-                </div>
+                <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-success-400 rounded-full border-2 border-white shadow-sm" />
               </div>
-            )}
+              <div>
+                <h1 className="text-xl font-bold text-slate-800 font-display">
+                  Springfield Auto
+                </h1>
+                <p className="text-sm text-slate-500">Voice Agent Dashboard</p>
+              </div>
+            </div>
 
-            {/* Voice Models Status */}
-            {!isCallActive && (
-              <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs ${
-                voiceStatus.ready
-                  ? 'bg-green-900/30 text-green-400'
-                  : 'bg-yellow-900/30 text-yellow-400'
-              }`}>
-                {voiceStatus.ready ? (
+            {/* Controls */}
+            <div className="flex items-center gap-4">
+              {/* Agent Flow Link */}
+              <Link
+                to="/flow"
+                className="flex items-center gap-2 px-4 py-2.5 bg-white/60 hover:bg-white border border-surface-300 hover:border-accent-300 rounded-xl text-sm text-slate-600 hover:text-accent-600 transition-all duration-200 shadow-sm hover:shadow"
+              >
+                <GitBranch size={16} />
+                <span className="font-medium">Agent Flow</span>
+              </Link>
+
+              {/* Latency Display */}
+              {isCallActive && latency && (
+                <div className="flex items-center gap-4 px-5 py-2.5 rounded-xl bg-white/80 border border-surface-300 shadow-sm animate-fade-in">
+                  <div className="flex flex-col items-center">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wide">STT</span>
+                    <span className="text-soft-600 font-mono text-sm font-medium">{latency.stt_ms}ms</span>
+                  </div>
+                  <div className="flex flex-col items-center">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wide">LLM</span>
+                    <span className="text-accent-600 font-mono text-sm font-medium">{latency.llm_ms}ms</span>
+                  </div>
+                  <div className="flex flex-col items-center">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wide">TTS</span>
+                    <span className="text-success-600 font-mono text-sm font-medium">{latency.tts_ms}ms</span>
+                  </div>
+                  <div className="flex flex-col items-center pl-3 border-l border-surface-300">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wide">Total</span>
+                    <span className={`font-mono text-sm font-bold ${
+                      latency.total_ms < 3000 ? 'text-success-600' :
+                      latency.total_ms < 6000 ? 'text-warning-600' : 'text-error-600'
+                    }`}>{(latency.total_ms / 1000).toFixed(1)}s</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Voice Models Status */}
+              {!isCallActive && (
+                <div className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm border transition-all duration-300 ${
+                  voiceStatus.ready
+                    ? 'bg-success-50 border-success-200 text-success-700'
+                    : 'bg-warning-50 border-warning-200 text-warning-700'
+                }`}>
+                  {voiceStatus.ready ? (
+                    <>
+                      <div className="w-2 h-2 rounded-full bg-success-500 status-dot status-dot-success" />
+                      <span className="font-medium">Models Ready</span>
+                    </>
+                  ) : (
+                    <>
+                      <div className="w-2 h-2 rounded-full bg-warning-500 animate-pulse" />
+                      <span className="font-medium">
+                        Loading {!voiceStatus.stt_loaded ? 'STT' : 'TTS'}...
+                      </span>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Call Status Badge */}
+              <div className={`flex items-center gap-2.5 px-5 py-2.5 rounded-full border transition-all duration-300 ${callStateDisplay.bg} ${callStateDisplay.color} ${callStateDisplay.border}`}>
+                {isCallActive ? (
                   <>
-                    <div className="w-2 h-2 rounded-full bg-green-400" />
-                    <span>Models Ready</span>
+                    <PhoneCall size={16} className="animate-pulse" />
+                    <span className="text-sm font-semibold">{callStateDisplay.text}</span>
                   </>
                 ) : (
                   <>
-                    <div className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
-                    <span>
-                      Loading {!voiceStatus.stt_loaded ? 'STT' : 'TTS'}...
-                    </span>
+                    <Phone size={16} />
+                    <span className="text-sm font-medium">Waiting for Call</span>
                   </>
                 )}
               </div>
-            )}
-
-            {/* Call Status */}
-            <div className={`flex items-center gap-2 px-4 py-2 rounded-full ${callStateDisplay.bg} ${callStateDisplay.color}`}>
-              {isCallActive ? (
-                <>
-                  <PhoneCall size={16} className="animate-pulse" />
-                  <span className="text-sm font-medium">{callStateDisplay.text}</span>
-                </>
-              ) : (
-                <>
-                  <Phone size={16} />
-                  <span className="text-sm font-medium">Waiting for Call</span>
-                </>
-              )}
             </div>
           </div>
         </div>
@@ -415,23 +422,25 @@ export default function App() {
 
       {/* Call Instructions Banner */}
       {!isCallActive && (
-        <div className="bg-indigo-900/30 border-b border-indigo-800/50 px-6 py-4">
-          <div className="max-w-7xl mx-auto flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <PhoneIncoming size={24} className="text-indigo-400" />
+        <div className="bg-gradient-to-r from-accent-50 via-soft-50 to-accent-50 border-b border-accent-100 animate-fade-in">
+          <div className="max-w-7xl mx-auto px-6 py-5 flex items-center justify-between">
+            <div className="flex items-center gap-5">
+              <div className="w-14 h-14 bg-gradient-to-br from-accent-400 to-soft-500 rounded-2xl flex items-center justify-center shadow-soft float-animation">
+                <PhoneIncoming size={24} className="text-white" />
+              </div>
               <div>
-                <p className="text-indigo-200 font-medium">
+                <p className="text-accent-800 font-semibold text-lg">
                   Call the AI Agent via Phone
                 </p>
-                <p className="text-indigo-300/70 text-sm">
+                <p className="text-accent-600/70 text-sm mt-0.5">
                   Dashboard will automatically display the conversation when a call is received
                 </p>
               </div>
             </div>
             {twilioPhone && (
-              <div className="flex items-center gap-2 px-4 py-2 bg-indigo-800/50 rounded-lg">
-                <Phone size={16} className="text-indigo-300" />
-                <span className="text-indigo-100 font-mono text-lg">{twilioPhone}</span>
+              <div className="flex items-center gap-3 px-5 py-3 bg-white/80 backdrop-blur-sm rounded-2xl border border-accent-200 shadow-soft">
+                <Phone size={18} className="text-accent-500" />
+                <span className="text-accent-800 font-mono text-xl font-semibold tracking-wide">{twilioPhone}</span>
               </div>
             )}
           </div>
@@ -440,13 +449,16 @@ export default function App() {
 
       {/* Active Call Banner */}
       {isCallActive && customerPhone && (
-        <div className="bg-green-900/30 border-b border-green-800/50 px-6 py-3">
-          <div className="max-w-7xl mx-auto flex items-center gap-4">
-            <div className="w-3 h-3 rounded-full bg-green-400 animate-pulse" />
-            <span className="text-green-200">
-              Active call from <span className="font-mono font-medium">{customerPhone}</span>
+        <div className="bg-gradient-to-r from-success-50 via-success-50/50 to-success-50 border-b border-success-200 animate-fade-in">
+          <div className="max-w-7xl mx-auto px-6 py-4 flex items-center gap-5">
+            <div className="flex items-center gap-3">
+              <div className="w-3 h-3 rounded-full bg-success-500 status-dot status-dot-success" />
+              <Waves size={20} className="text-success-500 animate-pulse" />
+            </div>
+            <span className="text-success-800 font-medium">
+              Active call from <span className="font-mono font-semibold bg-success-100 px-2 py-0.5 rounded-md">{customerPhone}</span>
             </span>
-            <span className="text-green-400/70 text-sm">
+            <span className="text-success-600/60 text-sm">
               Session: {sessionId}
             </span>
           </div>
@@ -455,35 +467,43 @@ export default function App() {
 
       {/* Error Banner */}
       {error && (
-        <div className="bg-red-900/50 border-b border-red-800 px-6 py-3">
-          <div className="max-w-7xl mx-auto text-red-300 text-sm">
+        <div className="bg-error-50 border-b border-error-200 px-6 py-4 animate-fade-in">
+          <div className="max-w-7xl mx-auto text-error-700 text-sm font-medium">
             {error}
           </div>
         </div>
       )}
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto p-6">
+      <main className="max-w-7xl mx-auto p-6 relative z-10">
         <div className="grid grid-cols-12 gap-6">
 
           {/* Left: Transcript */}
-          <div className="col-span-5">
+          <div className="col-span-5 animate-fade-in-up" style={{ animationDelay: '0.1s' }}>
             <Transcript messages={transcript} isActive={isCallActive} />
           </div>
 
           {/* Middle: Agent State & Booking */}
           <div className="col-span-4 space-y-6">
-            <AgentState state={agentState} />
-            <BookingSlots slots={bookingSlots} confirmedAppointment={confirmedAppointment} intent={agentState.intent} bookingInProgress={bookingInProgress} />
+            <div className="animate-fade-in-up" style={{ animationDelay: '0.2s' }}>
+              <AgentState state={agentState} />
+            </div>
+            <div className="animate-fade-in-up" style={{ animationDelay: '0.3s' }}>
+              <BookingSlots slots={bookingSlots} confirmedAppointment={confirmedAppointment} intent={agentState.intent} bookingInProgress={bookingInProgress} />
+            </div>
           </div>
 
           {/* Right: Customer & Availability */}
           <div className="col-span-3 space-y-6">
-            <CustomerInfo customer={customer} />
-            <AvailabilityCalendar
-              appointmentType={bookingSlots?.appointment_type}
-              wsUpdate={availabilityWsUpdate}
-            />
+            <div className="animate-fade-in-up" style={{ animationDelay: '0.4s' }}>
+              <CustomerInfo customer={customer} />
+            </div>
+            <div className="animate-fade-in-up" style={{ animationDelay: '0.5s' }}>
+              <AvailabilityCalendar
+                appointmentType={bookingSlots?.appointment_type}
+                wsUpdate={availabilityWsUpdate}
+              />
+            </div>
           </div>
 
         </div>
@@ -491,32 +511,44 @@ export default function App() {
 
       {/* Session ID Footer */}
       {sessionId && (
-        <footer className="fixed bottom-0 left-0 right-0 bg-gray-900 border-t border-gray-800 px-6 py-2">
-          <div className="max-w-7xl mx-auto flex items-center justify-between text-xs text-gray-500">
-            <span>Session: {sessionId}</span>
-            <span>WebSocket: {wsConnected ? '🟢 Connected' : '🔴 Disconnected'}</span>
+        <footer className="fixed bottom-0 left-0 right-0 glass-card-solid border-t border-surface-300/50 px-6 py-3 z-40">
+          <div className="max-w-7xl mx-auto flex items-center justify-between text-xs">
+            <span className="text-slate-500 font-mono">Session: {sessionId}</span>
+            <div className="flex items-center gap-2">
+              <div className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-success-500' : 'bg-error-500'}`} />
+              <span className={wsConnected ? 'text-success-600' : 'text-error-600'}>
+                WebSocket {wsConnected ? 'Connected' : 'Disconnected'}
+              </span>
+            </div>
           </div>
         </footer>
       )}
 
       {/* Notification Toasts */}
-      <div className="fixed top-20 right-6 space-y-2 z-50">
-        {notifications.map((notif) => (
+      <div className="fixed top-24 right-6 space-y-3 z-50">
+        {notifications.map((notif, index) => (
           <div
             key={notif.id}
-            className={`max-w-sm p-4 rounded-lg shadow-lg border animate-pulse ${
+            className={`max-w-sm p-4 rounded-2xl shadow-glass-lg border backdrop-blur-md animate-slide-in-right ${
               notif.priority === 'interrupt'
-                ? 'bg-green-900/90 border-green-600 text-green-100'
-                : 'bg-yellow-900/90 border-yellow-600 text-yellow-100'
+                ? 'bg-success-50/95 border-success-200 text-success-800'
+                : 'bg-warning-50/95 border-warning-200 text-warning-800'
             }`}
+            style={{ animationDelay: `${index * 0.1}s` }}
           >
             <div className="flex items-start gap-3">
-              <div className="text-2xl">
-                {notif.priority === 'interrupt' ? '✅' : '⏰'}
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                notif.priority === 'interrupt'
+                  ? 'bg-success-100'
+                  : 'bg-warning-100'
+              }`}>
+                <span className="text-xl">
+                  {notif.priority === 'interrupt' ? '✓' : '⏱'}
+                </span>
               </div>
-              <div>
+              <div className="flex-1">
                 <p className="text-sm font-medium">{notif.message}</p>
-                <p className="text-xs opacity-70 mt-1">{notif.timestamp}</p>
+                <p className="text-xs opacity-60 mt-1">{notif.timestamp}</p>
               </div>
             </div>
           </div>

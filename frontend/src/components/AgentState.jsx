@@ -1,126 +1,141 @@
 import React from 'react'
-import { Brain, UserCheck, Clock, XCircle, Bot } from 'lucide-react'
+import { Brain, UserCheck, Clock, XCircle, Bot, Sparkles } from 'lucide-react'
 
 const HUMAN_STATUS_CONFIG = {
   initiated: {
     label: 'Initiating call...',
     icon: Clock,
-    bgColor: 'bg-blue-900/30',
-    borderColor: 'border-blue-700',
-    textColor: 'text-blue-300',
-    iconColor: 'text-blue-400'
+    bgColor: 'bg-soft-50',
+    borderColor: 'border-soft-200',
+    textColor: 'text-soft-700',
+    iconColor: 'text-soft-500',
+    iconBg: 'bg-soft-100'
   },
   checking: {
     label: 'Checking availability...',
     icon: Clock,
-    bgColor: 'bg-orange-900/30',
-    borderColor: 'border-orange-700',
-    textColor: 'text-orange-300',
-    iconColor: 'text-orange-400'
+    bgColor: 'bg-warning-50',
+    borderColor: 'border-warning-200',
+    textColor: 'text-warning-700',
+    iconColor: 'text-warning-500',
+    iconBg: 'bg-warning-100'
   },
   calling: {
     label: 'Calling team member...',
     icon: Clock,
-    bgColor: 'bg-blue-900/30',
-    borderColor: 'border-blue-700',
-    textColor: 'text-blue-300',
-    iconColor: 'text-blue-400'
+    bgColor: 'bg-soft-50',
+    borderColor: 'border-soft-200',
+    textColor: 'text-soft-700',
+    iconColor: 'text-soft-500',
+    iconBg: 'bg-soft-100'
   },
   ringing: {
     label: 'Phone ringing...',
     icon: Clock,
-    bgColor: 'bg-indigo-900/30',
-    borderColor: 'border-indigo-700',
-    textColor: 'text-indigo-300',
-    iconColor: 'text-indigo-400'
+    bgColor: 'bg-accent-50',
+    borderColor: 'border-accent-200',
+    textColor: 'text-accent-700',
+    iconColor: 'text-accent-500',
+    iconBg: 'bg-accent-100'
   },
   waiting_confirmation: {
     label: 'Waiting for agent to accept...',
     icon: Clock,
-    bgColor: 'bg-yellow-900/30',
-    borderColor: 'border-yellow-700',
-    textColor: 'text-yellow-300',
-    iconColor: 'text-yellow-400'
+    bgColor: 'bg-warning-50',
+    borderColor: 'border-warning-200',
+    textColor: 'text-warning-700',
+    iconColor: 'text-warning-500',
+    iconBg: 'bg-warning-100'
   },
   confirmed: {
     label: 'Agent accepted, connecting...',
     icon: UserCheck,
-    bgColor: 'bg-green-900/30',
-    borderColor: 'border-green-700',
-    textColor: 'text-green-300',
-    iconColor: 'text-green-400'
+    bgColor: 'bg-success-50',
+    borderColor: 'border-success-200',
+    textColor: 'text-success-700',
+    iconColor: 'text-success-500',
+    iconBg: 'bg-success-100'
   },
   connected: {
     label: 'Human agent connected',
     icon: UserCheck,
-    bgColor: 'bg-green-900/30',
-    borderColor: 'border-green-700',
-    textColor: 'text-green-300',
-    iconColor: 'text-green-400'
+    bgColor: 'bg-success-50',
+    borderColor: 'border-success-200',
+    textColor: 'text-success-700',
+    iconColor: 'text-success-500',
+    iconBg: 'bg-success-100'
   },
   unavailable: {
     label: 'Human agents unavailable',
     icon: XCircle,
-    bgColor: 'bg-red-900/30',
-    borderColor: 'border-red-700',
-    textColor: 'text-red-300',
-    iconColor: 'text-red-400'
+    bgColor: 'bg-error-50',
+    borderColor: 'border-error-200',
+    textColor: 'text-error-700',
+    iconColor: 'text-error-500',
+    iconBg: 'bg-error-100'
   },
   busy: {
     label: 'Team member busy',
     icon: XCircle,
-    bgColor: 'bg-orange-900/30',
-    borderColor: 'border-orange-700',
-    textColor: 'text-orange-300',
-    iconColor: 'text-orange-400'
+    bgColor: 'bg-warning-50',
+    borderColor: 'border-warning-200',
+    textColor: 'text-warning-700',
+    iconColor: 'text-warning-500',
+    iconBg: 'bg-warning-100'
   },
   'no-answer': {
     label: 'No answer',
     icon: XCircle,
-    bgColor: 'bg-yellow-900/30',
-    borderColor: 'border-yellow-700',
-    textColor: 'text-yellow-300',
-    iconColor: 'text-yellow-400'
+    bgColor: 'bg-warning-50',
+    borderColor: 'border-warning-200',
+    textColor: 'text-warning-700',
+    iconColor: 'text-warning-500',
+    iconBg: 'bg-warning-100'
   },
   voicemail: {
     label: 'Went to voicemail',
     icon: XCircle,
-    bgColor: 'bg-orange-900/30',
-    borderColor: 'border-orange-700',
-    textColor: 'text-orange-300',
-    iconColor: 'text-orange-400'
+    bgColor: 'bg-warning-50',
+    borderColor: 'border-warning-200',
+    textColor: 'text-warning-700',
+    iconColor: 'text-warning-500',
+    iconBg: 'bg-warning-100'
   },
   declined: {
     label: 'Agent declined call',
     icon: XCircle,
-    bgColor: 'bg-orange-900/30',
-    borderColor: 'border-orange-700',
-    textColor: 'text-orange-300',
-    iconColor: 'text-orange-400'
+    bgColor: 'bg-warning-50',
+    borderColor: 'border-warning-200',
+    textColor: 'text-warning-700',
+    iconColor: 'text-warning-500',
+    iconBg: 'bg-warning-100'
   },
   failed: {
     label: 'Could not connect',
     icon: XCircle,
-    bgColor: 'bg-red-900/30',
-    borderColor: 'border-red-700',
-    textColor: 'text-red-300',
-    iconColor: 'text-red-400'
+    bgColor: 'bg-error-50',
+    borderColor: 'border-error-200',
+    textColor: 'text-error-700',
+    iconColor: 'text-error-500',
+    iconBg: 'bg-error-100'
   },
   canceled: {
     label: 'Call rejected',
     icon: XCircle,
-    bgColor: 'bg-orange-900/30',
-    borderColor: 'border-orange-700',
-    textColor: 'text-orange-300',
-    iconColor: 'text-orange-400'
+    bgColor: 'bg-warning-50',
+    borderColor: 'border-warning-200',
+    textColor: 'text-warning-700',
+    iconColor: 'text-warning-500',
+    iconBg: 'bg-warning-100'
   },
   returned_to_ai: {
     label: 'Returned to AI assistant',
     icon: Bot,
-    bgColor: 'bg-gray-800/50',
-    borderColor: 'border-gray-600',
-    textColor: 'text-gray-300',
-    iconColor: 'text-gray-400'
+    bgColor: 'bg-surface-100',
+    borderColor: 'border-surface-300',
+    textColor: 'text-slate-600',
+    iconColor: 'text-slate-500',
+    iconBg: 'bg-surface-200'
   }
 }
 
@@ -138,39 +153,46 @@ const INTENTS = {
 
 export default function AgentState({ state }) {
   return (
-    <div className="bg-gray-900/50 backdrop-blur border border-gray-800/50 rounded-2xl overflow-hidden shadow-xl">
+    <div className="glass-card rounded-3xl overflow-hidden shadow-glass-lg">
       {/* Header */}
-      <div className="px-5 py-4 bg-gradient-to-r from-gray-800/50 to-gray-800/30 border-b border-gray-700/50 flex items-center gap-2">
-        <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-lg flex items-center justify-center shadow-lg shadow-purple-500/20">
-          <Brain size={16} className="text-white" />
+      <div className="px-5 py-4 bg-gradient-to-r from-white/80 to-surface-100/80 border-b border-surface-200/50 flex items-center gap-3">
+        <div className="w-10 h-10 bg-gradient-to-br from-accent-400 to-soft-500 rounded-xl flex items-center justify-center shadow-soft">
+          <Brain size={18} className="text-white" />
         </div>
-        <h2 className="font-semibold text-white">Agent State</h2>
+        <div>
+          <h2 className="font-semibold text-slate-800">Agent State</h2>
+          <p className="text-xs text-slate-400">AI processing status</p>
+        </div>
       </div>
 
       <div className="p-5 space-y-4">
         {/* Unified Agent Status */}
-        <div className="flex items-center gap-3 p-4 bg-gradient-to-r from-purple-900/20 to-blue-900/20 rounded-xl border border-purple-700/30 shadow-inner">
-          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center shadow-lg shadow-purple-500/30">
-            <Bot size={24} className="text-white" />
+        <div className="flex items-center gap-4 p-4 bg-gradient-to-r from-accent-50/50 to-soft-50/50 rounded-2xl border border-accent-100 transition-all duration-300 hover:shadow-soft">
+          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-accent-400 to-soft-500 flex items-center justify-center shadow-soft">
+            <Bot size={26} className="text-white" />
           </div>
-          <div>
-            <div className="font-medium text-white">Unified Agent</div>
-            <div className="text-xs text-gray-400">Handles FAQ, Booking, Escalation</div>
+          <div className="flex-1">
+            <div className="font-semibold text-slate-800 flex items-center gap-2">
+              Unified Agent
+              <Sparkles size={14} className="text-accent-500" />
+            </div>
+            <div className="text-xs text-slate-500 mt-0.5">Handles FAQ, Booking, Escalation</div>
           </div>
-          <div className="ml-auto">
-            <div className="w-3 h-3 rounded-full bg-green-400 animate-pulse shadow-lg shadow-green-400/50" />
+          <div className="relative">
+            <div className="w-3.5 h-3.5 rounded-full bg-success-400 shadow-glow-success" />
+            <div className="absolute inset-0 w-3.5 h-3.5 rounded-full bg-success-400 animate-ping opacity-30" />
           </div>
         </div>
 
         {/* Current Activity */}
         {state.intent && (
-          <div className="bg-gray-800/50 rounded-xl p-4">
-            <div className="text-xs text-gray-400 mb-2 uppercase tracking-wide">Current Activity</div>
-            <div className="flex items-center gap-2">
-              <span className="px-3 py-1.5 bg-gradient-to-r from-indigo-600 to-purple-600 rounded-lg text-xs font-medium uppercase shadow-lg shadow-indigo-500/20">
+          <div className="bg-white/60 backdrop-blur-sm rounded-2xl p-4 border border-surface-200 animate-fade-in">
+            <div className="text-[10px] text-slate-400 mb-2 uppercase tracking-wider font-medium">Current Activity</div>
+            <div className="flex items-center gap-3">
+              <span className="px-3 py-1.5 bg-gradient-to-r from-accent-500 to-soft-500 rounded-lg text-xs font-semibold uppercase text-white shadow-soft">
                 {state.intent}
               </span>
-              <span className="text-sm text-gray-300">
+              <span className="text-sm text-slate-600 font-medium">
                 {INTENTS[state.intent] || state.intent}
               </span>
             </div>
@@ -179,23 +201,23 @@ export default function AgentState({ state }) {
 
         {/* Confidence (if available) */}
         {state.confidence > 0 && (
-          <div className="bg-gray-800/50 rounded-xl p-4">
-            <div className="text-xs text-gray-400 mb-3 uppercase tracking-wide">Intent Confidence</div>
-            <div className="flex items-center gap-3">
-              <div className="flex-1 h-2.5 bg-gray-700 rounded-full overflow-hidden">
+          <div className="bg-white/60 backdrop-blur-sm rounded-2xl p-4 border border-surface-200 animate-fade-in">
+            <div className="text-[10px] text-slate-400 mb-3 uppercase tracking-wider font-medium">Intent Confidence</div>
+            <div className="flex items-center gap-4">
+              <div className="flex-1 h-3 bg-surface-200 rounded-full overflow-hidden">
                 <div
-                  className={`h-full rounded-full transition-all duration-500 ${
-                    state.confidence >= 0.8 ? 'bg-gradient-to-r from-green-500 to-emerald-500' :
-                    state.confidence >= 0.6 ? 'bg-gradient-to-r from-indigo-500 to-purple-500' :
-                    'bg-gradient-to-r from-yellow-500 to-orange-500'
+                  className={`h-full rounded-full transition-all duration-500 ease-out ${
+                    state.confidence >= 0.8 ? 'bg-gradient-to-r from-success-400 to-success-500' :
+                    state.confidence >= 0.6 ? 'bg-gradient-to-r from-accent-400 to-soft-500' :
+                    'bg-gradient-to-r from-warning-400 to-warning-500'
                   }`}
                   style={{ width: `${state.confidence * 100}%` }}
                 />
               </div>
-              <span className={`text-sm font-bold ${
-                state.confidence >= 0.8 ? 'text-green-400' :
-                state.confidence >= 0.6 ? 'text-indigo-400' :
-                'text-yellow-400'
+              <span className={`text-sm font-bold min-w-[40px] text-right ${
+                state.confidence >= 0.8 ? 'text-success-600' :
+                state.confidence >= 0.6 ? 'text-accent-600' :
+                'text-warning-600'
               }`}>
                 {Math.round(state.confidence * 100)}%
               </span>
@@ -213,8 +235,6 @@ export default function AgentState({ state }) {
   )
 }
 
-// Updated human status config with better colors
-
 function EscalationStatus({ status }) {
   const statusKey = status || 'checking'
   const config = HUMAN_STATUS_CONFIG[statusKey] || HUMAN_STATUS_CONFIG.checking
@@ -222,21 +242,21 @@ function EscalationStatus({ status }) {
   const isInProgress = ['checking', 'calling', 'ringing', 'waiting_confirmation'].includes(statusKey)
 
   return (
-    <div className={`${config.bgColor} border ${config.borderColor} rounded-lg p-3`}>
-      <div className="flex items-center gap-3">
-        <div className={`${config.iconColor}`}>
-          <IconComponent size={20} className={isInProgress ? 'animate-spin' : ''} />
+    <div className={`${config.bgColor} border ${config.borderColor} rounded-2xl p-4 animate-fade-in-scale`}>
+      <div className="flex items-center gap-4">
+        <div className={`w-11 h-11 rounded-xl ${config.iconBg} flex items-center justify-center`}>
+          <IconComponent size={20} className={`${config.iconColor} ${isInProgress ? 'animate-spin' : ''}`} />
         </div>
         <div className="flex-1">
-          <div className={`text-sm font-medium ${config.textColor}`}>
+          <div className={`text-sm font-semibold ${config.textColor}`}>
             Human Escalation
           </div>
-          <div className={`text-xs ${config.textColor} opacity-80`}>
+          <div className={`text-xs ${config.textColor} opacity-70 mt-0.5`}>
             {config.label}
           </div>
         </div>
         {isInProgress && (
-          <div className="flex gap-1">
+          <div className="flex gap-1.5">
             <div className={`w-2 h-2 rounded-full ${config.iconColor.replace('text-', 'bg-')} animate-bounce`} style={{ animationDelay: '0ms' }} />
             <div className={`w-2 h-2 rounded-full ${config.iconColor.replace('text-', 'bg-')} animate-bounce`} style={{ animationDelay: '150ms' }} />
             <div className={`w-2 h-2 rounded-full ${config.iconColor.replace('text-', 'bg-')} animate-bounce`} style={{ animationDelay: '300ms' }} />

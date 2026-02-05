@@ -1,24 +1,254 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-body {
-  @apply bg-gray-950 text-white;
+/* Base styles - soft light theme */
+:root {
+  --bg-gradient-start: #f8fbfc;
+  --bg-gradient-mid: #f0f7fa;
+  --bg-gradient-end: #e8f4f8;
+  --glass-bg: rgba(255, 255, 255, 0.7);
+  --glass-border: rgba(34, 161, 179, 0.1);
+  --text-primary: #1a3a47;
+  --text-secondary: #4a6b7a;
+  --text-muted: #7a9aaa;
 }
 
-/* Custom scrollbar */
+body {
+  @apply bg-surface-100 text-slate-700 antialiased;
+  font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+  background: linear-gradient(135deg, var(--bg-gradient-start) 0%, var(--bg-gradient-mid) 50%, var(--bg-gradient-end) 100%);
+  min-height: 100vh;
+}
+
+/* Subtle background pattern */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-image:
+    radial-gradient(circle at 20% 80%, rgba(34, 161, 179, 0.03) 0%, transparent 50%),
+    radial-gradient(circle at 80% 20%, rgba(65, 147, 192, 0.03) 0%, transparent 50%),
+    radial-gradient(circle at 40% 40%, rgba(34, 197, 99, 0.02) 0%, transparent 40%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Glass card component */
+@layer components {
+  .glass-card {
+    @apply bg-white/70 backdrop-blur-md border border-white/50 shadow-glass;
+    background: linear-gradient(135deg, rgba(255,255,255,0.85) 0%, rgba(255,255,255,0.65) 100%);
+  }
+
+  .glass-card-solid {
+    @apply bg-white/90 backdrop-blur-sm border border-surface-300/50 shadow-glass;
+  }
+
+  .soft-glow {
+    box-shadow: 0 0 30px rgba(34, 161, 179, 0.1), 0 4px 20px rgba(0, 0, 0, 0.05);
+  }
+
+  .accent-gradient {
+    @apply bg-gradient-to-r from-accent-400 to-soft-400;
+  }
+
+  .accent-gradient-text {
+    @apply bg-gradient-to-r from-accent-600 to-soft-600 bg-clip-text text-transparent;
+  }
+}
+
+/* Custom scrollbar - soft light theme */
 ::-webkit-scrollbar {
   width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  @apply bg-gray-800;
+  @apply bg-surface-200/50 rounded-full;
 }
 
 ::-webkit-scrollbar-thumb {
-  @apply bg-gray-600 rounded-full;
+  @apply bg-accent-300/50 rounded-full transition-colors;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  @apply bg-gray-500;
+  @apply bg-accent-400/60;
+}
+
+/* Smooth transitions for interactive elements */
+button, a, input, select {
+  @apply transition-all duration-200 ease-out;
+}
+
+/* Focus states */
+button:focus-visible, a:focus-visible, input:focus-visible {
+  @apply outline-none ring-2 ring-accent-400/50 ring-offset-2 ring-offset-white;
+}
+
+/* Status indicator animations */
+.status-dot {
+  @apply relative;
+}
+
+.status-dot::after {
+  content: '';
+  @apply absolute inset-0 rounded-full animate-ping;
+  animation-duration: 2s;
+}
+
+.status-dot-success::after {
+  @apply bg-success-400/30;
+}
+
+.status-dot-warning::after {
+  @apply bg-warning-400/30;
+}
+
+.status-dot-error::after {
+  @apply bg-error-400/30;
+}
+
+/* Message bubble animations */
+.message-enter {
+  animation: messageSlide 0.3s ease-out forwards;
+}
+
+@keyframes messageSlide {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Card hover effect */
+.card-hover {
+  @apply transition-all duration-300;
+}
+
+.card-hover:hover {
+  @apply shadow-soft-lg;
+  transform: translateY(-2px);
+}
+
+/* Shimmer loading effect */
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(34, 161, 179, 0.05) 0%,
+    rgba(34, 161, 179, 0.1) 50%,
+    rgba(34, 161, 179, 0.05) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s linear infinite;
+}
+
+/* Floating animation for icons */
+.float-animation {
+  animation: float 3s ease-in-out infinite;
+}
+
+/* Soft pulse for live indicators */
+.pulse-soft {
+  animation: pulseSoft 2s ease-in-out infinite;
+}
+
+@keyframes pulseSoft {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.05);
+  }
+}
+
+/* Progress bar glow */
+.progress-glow {
+  box-shadow: 0 0 10px currentColor;
+}
+
+/* Stagger animation delays for lists */
+.stagger-1 { animation-delay: 0.05s; }
+.stagger-2 { animation-delay: 0.1s; }
+.stagger-3 { animation-delay: 0.15s; }
+.stagger-4 { animation-delay: 0.2s; }
+.stagger-5 { animation-delay: 0.25s; }
+.stagger-6 { animation-delay: 0.3s; }
+.stagger-7 { animation-delay: 0.35s; }
+
+/* Tooltip styling */
+.tooltip {
+  @apply absolute z-50 px-2 py-1 text-xs rounded-lg bg-slate-800 text-white shadow-lg;
+  @apply opacity-0 pointer-events-none transition-opacity duration-200;
+}
+
+.tooltip-trigger:hover .tooltip {
+  @apply opacity-100;
+}
+
+/* Badge styles */
+.badge {
+  @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium;
+}
+
+.badge-success {
+  @apply bg-success-100 text-success-700 border border-success-200;
+}
+
+.badge-warning {
+  @apply bg-warning-100 text-warning-700 border border-warning-200;
+}
+
+.badge-error {
+  @apply bg-error-100 text-error-700 border border-error-200;
+}
+
+.badge-accent {
+  @apply bg-accent-100 text-accent-700 border border-accent-200;
+}
+
+/* Input field styles */
+.input-field {
+  @apply w-full px-4 py-2.5 rounded-xl;
+  @apply bg-white/80 border border-surface-300;
+  @apply text-slate-700 placeholder-slate-400;
+  @apply focus:border-accent-400 focus:ring-2 focus:ring-accent-400/20;
+  @apply transition-all duration-200;
+}
+
+/* Button variants */
+.btn {
+  @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-medium;
+  @apply transition-all duration-200 ease-out;
+  @apply focus:outline-none focus:ring-2 focus:ring-offset-2;
+}
+
+.btn-primary {
+  @apply bg-gradient-to-r from-accent-500 to-accent-600 text-white;
+  @apply hover:from-accent-600 hover:to-accent-700;
+  @apply shadow-soft hover:shadow-soft-lg;
+  @apply focus:ring-accent-400;
+}
+
+.btn-secondary {
+  @apply bg-white/80 border border-surface-300 text-slate-700;
+  @apply hover:bg-white hover:border-accent-300;
+  @apply focus:ring-accent-400;
+}
+
+.btn-ghost {
+  @apply bg-transparent text-slate-600;
+  @apply hover:bg-surface-200/50;
+  @apply focus:ring-accent-400;
 }

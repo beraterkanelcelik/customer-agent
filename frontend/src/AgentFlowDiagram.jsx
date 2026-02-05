@@ -3,24 +3,26 @@ import { Link } from 'react-router-dom'
 import { ArrowLeft, GitBranch } from 'lucide-react'
 import mermaid from 'mermaid'
 
-// Initialize mermaid with dark theme
+// Initialize mermaid with soft light theme
 mermaid.initialize({
   startOnLoad: false,
-  theme: 'dark',
+  theme: 'base',
   themeVariables: {
-    primaryColor: '#6366f1',
-    primaryTextColor: '#fff',
-    primaryBorderColor: '#4f46e5',
-    lineColor: '#94a3b8',
-    secondaryColor: '#1e1b4b',
-    tertiaryColor: '#312e81',
-    background: '#0f172a',
-    mainBkg: '#1e293b',
-    nodeBorder: '#4f46e5',
-    clusterBkg: '#1e293b',
-    clusterBorder: '#334155',
-    titleColor: '#f1f5f9',
-    edgeLabelBackground: '#1e293b'
+    primaryColor: '#d4f1f4',
+    primaryTextColor: '#1a3a47',
+    primaryBorderColor: '#22a1b3',
+    lineColor: '#7a9aaa',
+    secondaryColor: '#e8f2f8',
+    tertiaryColor: '#f0fafb',
+    background: '#fafcfd',
+    mainBkg: '#ffffff',
+    nodeBorder: '#22a1b3',
+    clusterBkg: '#f5f9fc',
+    clusterBorder: '#c5d9e4',
+    titleColor: '#1a3a47',
+    edgeLabelBackground: '#ffffff',
+    textColor: '#1a3a47',
+    nodeTextColor: '#1a3a47'
   },
   flowchart: {
     curve: 'basis',
@@ -72,10 +74,10 @@ flowchart TB
     GRAPH --> LangGraph
     TOOLS --> Capabilities
 
-    style Twilio fill:#1e3a5f,stroke:#3b82f6
-    style Backend fill:#1e293b,stroke:#6366f1
-    style LangGraph fill:#312e81,stroke:#8b5cf6
-    style Capabilities fill:#1e3a3f,stroke:#14b8a6
+    style Twilio fill:#e8f2f8,stroke:#4193c0
+    style Backend fill:#f0fafb,stroke:#22a1b3
+    style LangGraph fill:#f5f0ff,stroke:#8b5cf6
+    style Capabilities fill:#f0fdf6,stroke:#22c563
 `
 
 const toolFlowChart = `
@@ -114,11 +116,11 @@ flowchart LR
         end
     end
 
-    style FAQ_Tools fill:#1e3a5f,stroke:#3b82f6
-    style Booking_Tools fill:#1e3a3f,stroke:#14b8a6
-    style Customer_Tools fill:#3a1e3f,stroke:#d946ef
-    style Slot_Tools fill:#3a3a1e,stroke:#eab308
-    style Call_Tools fill:#3a1e1e,stroke:#ef4444
+    style FAQ_Tools fill:#e8f2f8,stroke:#4193c0
+    style Booking_Tools fill:#f0fdf6,stroke:#22c563
+    style Customer_Tools fill:#fdf4ff,stroke:#d946ef
+    style Slot_Tools fill:#fefce8,stroke:#eab308
+    style Call_Tools fill:#fef2f2,stroke:#ef4444
 `
 
 const bookingFlowChart = `
@@ -170,12 +172,12 @@ flowchart TB
     BOOK --> MODEL8B[Call Model]
     MODEL8B --> SUCCESS((Booking Complete!))
 
-    style START fill:#6366f1,stroke:#4f46e5
-    style SUCCESS fill:#22c55e,stroke:#16a34a
-    style CREATE fill:#d946ef,stroke:#c026d3
-    style BOOK fill:#14b8a6,stroke:#0d9488
-    style CHECK fill:#eab308,stroke:#ca8a04
-    style LIST fill:#3b82f6,stroke:#2563eb
+    style START fill:#d4f1f4,stroke:#22a1b3
+    style SUCCESS fill:#dcfce9,stroke:#22c563
+    style CREATE fill:#fae8ff,stroke:#d946ef
+    style BOOK fill:#ccfbf1,stroke:#14b8a6
+    style CHECK fill:#fef9c3,stroke:#eab308
+    style LIST fill:#dbeafe,stroke:#3b82f6
 `
 
 const graphNodesChart = `
@@ -211,12 +213,12 @@ flowchart TB
     RouterFn -->|"no tools"| PostNode
     PostNode --> END_NODE((END))
 
-    style Graph fill:#1e1b4b,stroke:#6366f1
-    style PreNode fill:#312e81,stroke:#8b5cf6
-    style AgentNode fill:#1e3a5f,stroke:#3b82f6
-    style ToolNode fill:#1e3a3f,stroke:#14b8a6
-    style PostNode fill:#3a3a1e,stroke:#eab308
-    style RouterFn fill:#3a1e3f,stroke:#d946ef
+    style Graph fill:#f5f0ff,stroke:#8b5cf6
+    style PreNode fill:#ede9fe,stroke:#8b5cf6
+    style AgentNode fill:#e8f2f8,stroke:#4193c0
+    style ToolNode fill:#f0fdf6,stroke:#22c563
+    style PostNode fill:#fefce8,stroke:#eab308
+    style RouterFn fill:#fdf4ff,stroke:#d946ef
 `
 
 const stateFlowChart = `
@@ -259,11 +261,11 @@ flowchart TB
     State --> |Persist| REDIS
     REDIS -.-> |Fallback| MEMORY
 
-    style State fill:#1e293b,stroke:#6366f1
-    style CustomerCtx fill:#3a1e3f,stroke:#d946ef
-    style BookingCtx fill:#1e3a3f,stroke:#14b8a6
-    style TaskCtx fill:#3a3a1e,stroke:#eab308
-    style Storage fill:#1e3a5f,stroke:#3b82f6
+    style State fill:#f0fafb,stroke:#22a1b3
+    style CustomerCtx fill:#fdf4ff,stroke:#d946ef
+    style BookingCtx fill:#f0fdf6,stroke:#22c563
+    style TaskCtx fill:#fefce8,stroke:#eab308
+    style Storage fill:#e8f2f8,stroke:#4193c0
 `
 
 export default function AgentFlowDiagram() {
@@ -305,55 +307,57 @@ export default function AgentFlowDiagram() {
   }, [])
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-950">
+    <div className="min-h-screen relative">
       {/* Header */}
-      <header className="bg-gray-900/80 backdrop-blur-lg border-b border-gray-800/50 px-6 py-4 sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
+      <header className="glass-card-solid sticky top-0 z-40 border-b border-surface-300/50">
+        <div className="max-w-7xl mx-auto px-6 py-4">
+          <div className="flex items-center justify-between">
             <Link
               to="/"
-              className="flex items-center gap-2 px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors"
+              className="flex items-center gap-2 px-4 py-2.5 bg-white/60 hover:bg-white border border-surface-300 hover:border-accent-300 rounded-xl text-sm text-slate-600 hover:text-accent-600 transition-all duration-200 shadow-sm hover:shadow"
             >
               <ArrowLeft size={16} />
-              <span>Back to Dashboard</span>
+              <span className="font-medium">Back to Dashboard</span>
             </Link>
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-xl flex items-center justify-center text-xl shadow-lg shadow-purple-500/20">
-              <GitBranch size={20} className="text-white" />
+
+            <div className="flex items-center gap-4 animate-fade-in">
+              <div className="w-12 h-12 bg-gradient-to-br from-accent-400 to-soft-500 rounded-2xl flex items-center justify-center shadow-soft">
+                <GitBranch size={22} className="text-white" />
+              </div>
+              <div>
+                <h1 className="text-xl font-bold text-slate-800 font-display">
+                  Agent Flow Diagram
+                </h1>
+                <p className="text-sm text-slate-500">System Architecture Visualization</p>
+              </div>
             </div>
-            <div>
-              <h1 className="text-xl font-bold bg-gradient-to-r from-white to-gray-300 bg-clip-text text-transparent">
-                Agent Flow Diagram
-              </h1>
-              <p className="text-sm text-gray-400">System Architecture Visualization</p>
-            </div>
+
+            <div className="w-[140px]"></div>
           </div>
-          <div></div>
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto p-6 space-y-8">
+      <main className="max-w-7xl mx-auto p-6 space-y-8 relative z-10">
 
         {/* Main Architecture */}
-        <section className="bg-gray-900/50 backdrop-blur border border-gray-800/50 rounded-2xl overflow-hidden">
-          <div className="px-6 py-4 bg-gradient-to-r from-indigo-900/30 to-purple-900/30 border-b border-gray-700/50">
-            <h2 className="text-lg font-semibold text-white">System Architecture</h2>
-            <p className="text-sm text-gray-400 mt-1">Twilio voice pipeline, backend, and LangGraph workflow</p>
+        <section className="glass-card rounded-3xl overflow-hidden shadow-glass-lg animate-fade-in-up" style={{ animationDelay: '0.1s' }}>
+          <div className="px-6 py-5 bg-gradient-to-r from-soft-50 to-accent-50 border-b border-surface-200/50">
+            <h2 className="text-lg font-semibold text-slate-800">System Architecture</h2>
+            <p className="text-sm text-slate-500 mt-1">Twilio voice pipeline, backend, and LangGraph workflow</p>
           </div>
-          <div className="p-6 overflow-x-auto">
+          <div className="p-6 overflow-x-auto bg-white/40">
             <div ref={mainRef} className="flex justify-center min-w-[800px]" />
           </div>
         </section>
 
         {/* Graph Nodes Detail - Full Width */}
-        <section className="bg-gray-900/50 backdrop-blur border border-gray-800/50 rounded-2xl overflow-hidden">
-          <div className="px-6 py-4 bg-gradient-to-r from-violet-900/30 to-fuchsia-900/30 border-b border-gray-700/50">
-            <h2 className="text-lg font-semibold text-white">LangGraph Nodes Detail</h2>
-            <p className="text-sm text-gray-400 mt-1">What each node in the graph does (graph.py)</p>
+        <section className="glass-card rounded-3xl overflow-hidden shadow-glass-lg animate-fade-in-up" style={{ animationDelay: '0.2s' }}>
+          <div className="px-6 py-5 bg-gradient-to-r from-violet-50 to-purple-50 border-b border-surface-200/50">
+            <h2 className="text-lg font-semibold text-slate-800">LangGraph Nodes Detail</h2>
+            <p className="text-sm text-slate-500 mt-1">What each node in the graph does (graph.py)</p>
           </div>
-          <div className="p-6 overflow-x-auto">
+          <div className="p-6 overflow-x-auto bg-white/40">
             <div ref={graphNodesRef} className="flex justify-center min-w-[900px]" />
           </div>
         </section>
@@ -362,84 +366,84 @@ export default function AgentFlowDiagram() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
           {/* Available Tools */}
-          <section className="bg-gray-900/50 backdrop-blur border border-gray-800/50 rounded-2xl overflow-hidden">
-            <div className="px-6 py-4 bg-gradient-to-r from-teal-900/30 to-cyan-900/30 border-b border-gray-700/50">
-              <h2 className="text-lg font-semibold text-white">Available Tools</h2>
-              <p className="text-sm text-gray-400 mt-1">All 15 tools the agent can use</p>
+          <section className="glass-card rounded-3xl overflow-hidden shadow-glass-lg animate-fade-in-up" style={{ animationDelay: '0.3s' }}>
+            <div className="px-6 py-5 bg-gradient-to-r from-accent-50 to-success-50 border-b border-surface-200/50">
+              <h2 className="text-lg font-semibold text-slate-800">Available Tools</h2>
+              <p className="text-sm text-slate-500 mt-1">All 15 tools the agent can use</p>
             </div>
-            <div className="p-6 overflow-x-auto">
+            <div className="p-6 overflow-x-auto bg-white/40">
               <div ref={toolRef} className="flex justify-center" />
             </div>
           </section>
 
           {/* State Structure */}
-          <section className="bg-gray-900/50 backdrop-blur border border-gray-800/50 rounded-2xl overflow-hidden">
-            <div className="px-6 py-4 bg-gradient-to-r from-yellow-900/30 to-orange-900/30 border-b border-gray-700/50">
-              <h2 className="text-lg font-semibold text-white">Conversation State</h2>
-              <p className="text-sm text-gray-400 mt-1">State structure and persistence</p>
+          <section className="glass-card rounded-3xl overflow-hidden shadow-glass-lg animate-fade-in-up" style={{ animationDelay: '0.4s' }}>
+            <div className="px-6 py-5 bg-gradient-to-r from-warning-50 to-yellow-50 border-b border-surface-200/50">
+              <h2 className="text-lg font-semibold text-slate-800">Conversation State</h2>
+              <p className="text-sm text-slate-500 mt-1">State structure and persistence</p>
             </div>
-            <div className="p-6 overflow-x-auto">
+            <div className="p-6 overflow-x-auto bg-white/40">
               <div ref={stateRef} className="flex justify-center" />
             </div>
           </section>
         </div>
 
         {/* Booking Flow */}
-        <section className="bg-gray-900/50 backdrop-blur border border-gray-800/50 rounded-2xl overflow-hidden">
-          <div className="px-6 py-4 bg-gradient-to-r from-green-900/30 to-emerald-900/30 border-b border-gray-700/50">
-            <h2 className="text-lg font-semibold text-white">Booking Flow</h2>
-            <p className="text-sm text-gray-400 mt-1">Step-by-step booking process with tool calls</p>
+        <section className="glass-card rounded-3xl overflow-hidden shadow-glass-lg animate-fade-in-up" style={{ animationDelay: '0.5s' }}>
+          <div className="px-6 py-5 bg-gradient-to-r from-success-50 to-emerald-50 border-b border-surface-200/50">
+            <h2 className="text-lg font-semibold text-slate-800">Booking Flow</h2>
+            <p className="text-sm text-slate-500 mt-1">Step-by-step booking process with tool calls</p>
           </div>
-          <div className="p-6 overflow-x-auto">
+          <div className="p-6 overflow-x-auto bg-white/40">
             <div ref={bookingRef} className="flex justify-center min-w-[600px]" />
           </div>
         </section>
 
         {/* Legend */}
-        <section className="bg-gray-900/50 backdrop-blur border border-gray-800/50 rounded-2xl p-6">
-          <h2 className="text-lg font-semibold text-white mb-4">Key Components</h2>
+        <section className="glass-card rounded-3xl p-6 shadow-glass-lg animate-fade-in-up" style={{ animationDelay: '0.6s' }}>
+          <h2 className="text-lg font-semibold text-slate-800 mb-5">Key Components</h2>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <div className="flex items-center gap-3">
-              <div className="w-4 h-4 rounded bg-indigo-500"></div>
-              <span className="text-sm text-gray-300">LangGraph Workflow</span>
+            <div className="flex items-center gap-3 p-3 bg-white/60 rounded-xl border border-surface-200">
+              <div className="w-4 h-4 rounded-lg bg-gradient-to-br from-accent-400 to-accent-500"></div>
+              <span className="text-sm text-slate-600 font-medium">LangGraph Workflow</span>
             </div>
-            <div className="flex items-center gap-3">
-              <div className="w-4 h-4 rounded bg-violet-500"></div>
-              <span className="text-sm text-gray-300">Graph Nodes</span>
+            <div className="flex items-center gap-3 p-3 bg-white/60 rounded-xl border border-surface-200">
+              <div className="w-4 h-4 rounded-lg bg-gradient-to-br from-violet-400 to-violet-500"></div>
+              <span className="text-sm text-slate-600 font-medium">Graph Nodes</span>
             </div>
-            <div className="flex items-center gap-3">
-              <div className="w-4 h-4 rounded bg-teal-500"></div>
-              <span className="text-sm text-gray-300">Agent Tools</span>
+            <div className="flex items-center gap-3 p-3 bg-white/60 rounded-xl border border-surface-200">
+              <div className="w-4 h-4 rounded-lg bg-gradient-to-br from-success-400 to-success-500"></div>
+              <span className="text-sm text-slate-600 font-medium">Agent Tools</span>
             </div>
-            <div className="flex items-center gap-3">
-              <div className="w-4 h-4 rounded bg-blue-500"></div>
-              <span className="text-sm text-gray-300">Twilio Voice</span>
+            <div className="flex items-center gap-3 p-3 bg-white/60 rounded-xl border border-surface-200">
+              <div className="w-4 h-4 rounded-lg bg-gradient-to-br from-soft-400 to-soft-500"></div>
+              <span className="text-sm text-slate-600 font-medium">Twilio Voice</span>
             </div>
-            <div className="flex items-center gap-3">
-              <div className="w-4 h-4 rounded bg-yellow-500"></div>
-              <span className="text-sm text-gray-300">State Management</span>
+            <div className="flex items-center gap-3 p-3 bg-white/60 rounded-xl border border-surface-200">
+              <div className="w-4 h-4 rounded-lg bg-gradient-to-br from-warning-400 to-warning-500"></div>
+              <span className="text-sm text-slate-600 font-medium">State Management</span>
             </div>
           </div>
 
           {/* Node Function Summary */}
-          <div className="mt-6 pt-6 border-t border-gray-700/50">
-            <h3 className="text-md font-semibold text-white mb-3">Graph Node Functions</h3>
+          <div className="mt-6 pt-6 border-t border-surface-200">
+            <h3 className="text-md font-semibold text-slate-800 mb-4">Graph Node Functions</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
-              <div className="bg-violet-900/20 border border-violet-700/30 rounded-lg p-3">
-                <div className="font-medium text-violet-300 mb-1">preprocess_node</div>
-                <div className="text-gray-400 text-xs">Processes notifications from background tasks (escalation results)</div>
+              <div className="bg-violet-50/80 border border-violet-200 rounded-2xl p-4 transition-all duration-200 hover:shadow-soft">
+                <div className="font-semibold text-violet-700 mb-2">preprocess_node</div>
+                <div className="text-slate-500 text-xs leading-relaxed">Processes notifications from background tasks (escalation results)</div>
               </div>
-              <div className="bg-blue-900/20 border border-blue-700/30 rounded-lg p-3">
-                <div className="font-medium text-blue-300 mb-1">agent_node</div>
-                <div className="text-gray-400 text-xs">Invokes LLM with tools bound - all decision making happens here</div>
+              <div className="bg-soft-50/80 border border-soft-200 rounded-2xl p-4 transition-all duration-200 hover:shadow-soft">
+                <div className="font-semibold text-soft-700 mb-2">agent_node</div>
+                <div className="text-slate-500 text-xs leading-relaxed">Invokes LLM with tools bound - all decision making happens here</div>
               </div>
-              <div className="bg-teal-900/20 border border-teal-700/30 rounded-lg p-3">
-                <div className="font-medium text-teal-300 mb-1">tool_node</div>
-                <div className="text-gray-400 text-xs">Executes tool calls and returns results back to agent</div>
+              <div className="bg-success-50/80 border border-success-200 rounded-2xl p-4 transition-all duration-200 hover:shadow-soft">
+                <div className="font-semibold text-success-700 mb-2">tool_node</div>
+                <div className="text-slate-500 text-xs leading-relaxed">Executes tool calls and returns results back to agent</div>
               </div>
-              <div className="bg-yellow-900/20 border border-yellow-700/30 rounded-lg p-3">
-                <div className="font-medium text-yellow-300 mb-1">postprocess_node</div>
-                <div className="text-gray-400 text-xs">Parses tool results, updates state, handles confirmations</div>
+              <div className="bg-warning-50/80 border border-warning-200 rounded-2xl p-4 transition-all duration-200 hover:shadow-soft">
+                <div className="font-semibold text-warning-700 mb-2">postprocess_node</div>
+                <div className="text-slate-500 text-xs leading-relaxed">Parses tool results, updates state, handles confirmations</div>
               </div>
             </div>
           </div>

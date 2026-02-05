@@ -1,5 +1,5 @@
 import React from 'react'
-import { Calendar, Check, Circle, CheckCircle2, Loader2 } from 'lucide-react'
+import { Calendar, Check, Circle, CheckCircle2, Loader2, Sparkles } from 'lucide-react'
 
 // Slots in the order they should be collected (customer-first approach)
 const SLOT_ORDER = [
@@ -60,53 +60,45 @@ export default function BookingSlots({ slots, confirmedAppointment, intent, book
   // Show confirmed appointment if available
   if (confirmedAppointment) {
     return (
-      <div className="bg-gray-900/50 backdrop-blur border border-gray-800/50 rounded-2xl overflow-hidden shadow-xl">
-        <div className="px-5 py-4 bg-gradient-to-r from-green-900/50 to-emerald-900/30 border-b border-green-700/50 flex items-center gap-2">
-          <div className="w-8 h-8 bg-gradient-to-br from-green-500 to-emerald-600 rounded-lg flex items-center justify-center shadow-lg shadow-green-500/30">
-            <CheckCircle2 size={16} className="text-white" />
+      <div className="glass-card rounded-3xl overflow-hidden shadow-glass-lg animate-fade-in-scale">
+        <div className="px-5 py-4 bg-gradient-to-r from-success-50 to-success-100/50 border-b border-success-200/50 flex items-center gap-3">
+          <div className="w-10 h-10 bg-gradient-to-br from-success-400 to-success-500 rounded-xl flex items-center justify-center shadow-glow-success">
+            <CheckCircle2 size={18} className="text-white" />
           </div>
-          <h2 className="font-semibold text-green-300">Booking Confirmed!</h2>
+          <div>
+            <h2 className="font-semibold text-success-800 flex items-center gap-2">
+              Booking Confirmed!
+              <Sparkles size={14} className="text-success-500" />
+            </h2>
+            <p className="text-xs text-success-600">Appointment scheduled successfully</p>
+          </div>
         </div>
 
         <div className="p-5 space-y-4">
-          <div className="bg-gradient-to-r from-green-900/30 to-emerald-900/20 rounded-xl p-4 border border-green-700/30">
-            <div className="text-xs text-green-400 uppercase tracking-wide mb-1">Confirmation #</div>
-            <div className="text-3xl font-bold bg-gradient-to-r from-green-300 to-emerald-300 bg-clip-text text-transparent">{confirmedAppointment.appointment_id}</div>
+          <div className="bg-gradient-to-r from-success-50 to-success-100/50 rounded-2xl p-5 border border-success-200/50">
+            <div className="text-[10px] text-success-600 uppercase tracking-wider font-medium mb-1">Confirmation #</div>
+            <div className="text-3xl font-bold text-success-700 font-mono">{confirmedAppointment.appointment_id}</div>
           </div>
 
-          <div className="space-y-2 text-sm">
-            <div className="flex justify-between py-2 border-b border-gray-800">
-              <span className="text-gray-400">Type</span>
-              <span className="text-white font-medium capitalize">{confirmedAppointment.appointment_type?.replace('_', ' ')}</span>
-            </div>
-            <div className="flex justify-between py-2 border-b border-gray-800">
-              <span className="text-gray-400">Date</span>
-              <span className="text-white font-medium">{confirmedAppointment.scheduled_date}</span>
-            </div>
-            <div className="flex justify-between py-2 border-b border-gray-800">
-              <span className="text-gray-400">Time</span>
-              <span className="text-white font-medium">{confirmedAppointment.scheduled_time}</span>
-            </div>
-            <div className="flex justify-between py-2 border-b border-gray-800">
-              <span className="text-gray-400">Customer</span>
-              <span className="text-white font-medium">{confirmedAppointment.customer_name}</span>
-            </div>
-            {confirmedAppointment.service_type && (
-              <div className="flex justify-between py-2 border-b border-gray-800">
-                <span className="text-gray-400">Service</span>
-                <span className="text-white font-medium">{confirmedAppointment.service_type}</span>
+          <div className="space-y-1 text-sm">
+            {[
+              { label: 'Type', value: confirmedAppointment.appointment_type?.replace('_', ' ') },
+              { label: 'Date', value: confirmedAppointment.scheduled_date },
+              { label: 'Time', value: confirmedAppointment.scheduled_time },
+              { label: 'Customer', value: confirmedAppointment.customer_name },
+              { label: 'Service', value: confirmedAppointment.service_type },
+              { label: 'Vehicle', value: confirmedAppointment.vehicle }
+            ].filter(item => item.value).map((item, i) => (
+              <div key={item.label} className="flex justify-between py-3 border-b border-surface-200 last:border-0 animate-fade-in" style={{ animationDelay: `${i * 0.05}s` }}>
+                <span className="text-slate-500">{item.label}</span>
+                <span className="text-slate-800 font-medium capitalize">{item.value}</span>
               </div>
-            )}
-            {confirmedAppointment.vehicle && (
-              <div className="flex justify-between py-2 border-b border-gray-800">
-                <span className="text-gray-400">Vehicle</span>
-                <span className="text-white font-medium">{confirmedAppointment.vehicle}</span>
-              </div>
-            )}
+            ))}
           </div>
 
           {confirmedAppointment.confirmation_email && (
-            <div className="text-xs text-gray-400 mt-3 p-2 bg-gray-800 rounded">
+            <div className="text-xs text-slate-500 mt-3 p-3 bg-surface-100/50 rounded-xl border border-surface-200 flex items-center gap-2">
+              <Check size={14} className="text-success-500" />
               Confirmation sent to: {confirmedAppointment.confirmation_email}
             </div>
           )}
@@ -120,16 +112,22 @@ export default function BookingSlots({ slots, confirmedAppointment, intent, book
 
   if (!shouldShowPanel) {
     return (
-      <div className="bg-gray-900/50 backdrop-blur border border-gray-800/50 rounded-2xl overflow-hidden shadow-xl">
-        <div className="px-5 py-4 bg-gradient-to-r from-gray-800/50 to-gray-800/30 border-b border-gray-700/50 flex items-center gap-2">
-          <div className="w-8 h-8 bg-gradient-to-br from-green-500 to-emerald-600 rounded-lg flex items-center justify-center shadow-lg shadow-green-500/20">
-            <Calendar size={16} className="text-white" />
+      <div className="glass-card rounded-3xl overflow-hidden shadow-glass-lg">
+        <div className="px-5 py-4 bg-gradient-to-r from-white/80 to-surface-100/80 border-b border-surface-200/50 flex items-center gap-3">
+          <div className="w-10 h-10 bg-gradient-to-br from-success-400 to-success-500 rounded-xl flex items-center justify-center shadow-soft">
+            <Calendar size={18} className="text-white" />
           </div>
-          <h2 className="font-semibold text-white">Booking Info</h2>
+          <div>
+            <h2 className="font-semibold text-slate-800">Booking Info</h2>
+            <p className="text-xs text-slate-400">Appointment details</p>
+          </div>
         </div>
-        <div className="p-5 text-center text-gray-500 py-8">
-          <Calendar size={32} className="mx-auto mb-3 opacity-40" />
-          <p className="text-sm">No booking in progress</p>
+        <div className="p-8 text-center">
+          <div className="w-16 h-16 mx-auto mb-4 bg-surface-200/50 rounded-2xl flex items-center justify-center">
+            <Calendar size={28} className="text-slate-300" />
+          </div>
+          <p className="text-sm text-slate-500 font-medium">No booking in progress</p>
+          <p className="text-xs text-slate-400 mt-1">Start by asking to book an appointment</p>
         </div>
       </div>
     )
@@ -138,32 +136,34 @@ export default function BookingSlots({ slots, confirmedAppointment, intent, book
   // Show booking in progress (booking started but no slots yet)
   if (shouldShowBooking && !hasAnySlot) {
     return (
-      <div className="bg-gray-900/50 backdrop-blur border border-gray-800/50 rounded-2xl overflow-hidden shadow-xl">
-        <div className="px-5 py-4 bg-gradient-to-r from-indigo-900/50 to-purple-900/30 border-b border-indigo-700/50 flex items-center gap-2">
-          <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg flex items-center justify-center shadow-lg shadow-indigo-500/20">
-            <Loader2 size={16} className="text-white animate-spin" />
+      <div className="glass-card rounded-3xl overflow-hidden shadow-glass-lg animate-fade-in">
+        <div className="px-5 py-4 bg-gradient-to-r from-accent-50 to-soft-50 border-b border-accent-200/50 flex items-center gap-3">
+          <div className="w-10 h-10 bg-gradient-to-br from-accent-400 to-soft-500 rounded-xl flex items-center justify-center shadow-soft">
+            <Loader2 size={18} className="text-white animate-spin" />
           </div>
-          <h2 className="font-semibold text-indigo-300">Starting Booking...</h2>
+          <div>
+            <h2 className="font-semibold text-accent-800">Starting Booking...</h2>
+            <p className="text-xs text-accent-600">Collecting your information</p>
+          </div>
         </div>
         <div className="p-5">
-          <div className="text-sm text-gray-400 mb-4">Collecting your information</div>
           {/* Progress bar - starts at 0 */}
           <div className="mb-5">
-            <div className="flex justify-between text-xs text-gray-500 mb-2">
-              <span>Progress</span>
-              <span>0 / {totalCount}</span>
+            <div className="flex justify-between text-xs mb-2">
+              <span className="text-slate-400 uppercase tracking-wide font-medium">Progress</span>
+              <span className="text-slate-500 font-medium">0 / {totalCount}</span>
             </div>
-            <div className="h-2.5 bg-gray-800 rounded-full overflow-hidden">
-              <div className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-300" style={{ width: '0%' }} />
+            <div className="h-3 bg-surface-200 rounded-full overflow-hidden">
+              <div className="h-full bg-gradient-to-r from-accent-400 to-soft-500 rounded-full transition-all duration-500 shimmer" style={{ width: '0%' }} />
             </div>
           </div>
           <div className="space-y-2 opacity-50">
-            {SLOT_ORDER.slice(0, 5).map(key => (
-              <div key={key} className="flex items-center justify-between py-2.5 border-b border-gray-800/50 last:border-0">
-                <span className="text-sm text-gray-500">{SLOT_LABELS[key]}</span>
-                <span className="text-sm text-gray-600 flex items-center gap-1">
-                  <Circle size={10} />
-                  &#8212;
+            {SLOT_ORDER.slice(0, 5).map((key, i) => (
+              <div key={key} className="flex items-center justify-between py-3 px-4 bg-white/40 rounded-xl border border-surface-200" style={{ animationDelay: `${i * 0.1}s` }}>
+                <span className="text-sm text-slate-400">{SLOT_LABELS[key]}</span>
+                <span className="text-sm text-slate-300 flex items-center gap-2">
+                  <Circle size={10} className="opacity-50" />
+                  <span>—</span>
                 </span>
               </div>
             ))}
@@ -191,27 +191,30 @@ export default function BookingSlots({ slots, confirmedAppointment, intent, book
   }
 
   return (
-    <div className="bg-gray-900/50 backdrop-blur border border-gray-800/50 rounded-2xl overflow-hidden shadow-xl">
-      <div className="px-5 py-4 bg-gradient-to-r from-gray-800/50 to-gray-800/30 border-b border-gray-700/50 flex items-center gap-2">
-        <div className="w-8 h-8 bg-gradient-to-br from-green-500 to-emerald-600 rounded-lg flex items-center justify-center shadow-lg shadow-green-500/20">
-          <Calendar size={16} className="text-white" />
+    <div className="glass-card rounded-3xl overflow-hidden shadow-glass-lg">
+      <div className="px-5 py-4 bg-gradient-to-r from-white/80 to-surface-100/80 border-b border-surface-200/50 flex items-center gap-3">
+        <div className="w-10 h-10 bg-gradient-to-br from-success-400 to-success-500 rounded-xl flex items-center justify-center shadow-soft">
+          <Calendar size={18} className="text-white" />
         </div>
-        <h2 className="font-semibold text-white">Booking Info</h2>
+        <div>
+          <h2 className="font-semibold text-slate-800">Booking Info</h2>
+          <p className="text-xs text-slate-400">Appointment details</p>
+        </div>
       </div>
 
       <div className="p-5">
         {/* Progress bar */}
         <div className="mb-5">
-          <div className="flex justify-between text-xs text-gray-500 mb-2">
-            <span>Progress</span>
-            <span className="font-medium">{filledCount} / {totalCount}</span>
+          <div className="flex justify-between text-xs mb-2">
+            <span className="text-slate-400 uppercase tracking-wide font-medium">Progress</span>
+            <span className="text-slate-600 font-semibold">{filledCount} / {totalCount}</span>
           </div>
-          <div className="h-2.5 bg-gray-800 rounded-full overflow-hidden">
+          <div className="h-3 bg-surface-200 rounded-full overflow-hidden">
             <div
-              className={`h-full rounded-full transition-all duration-500 ${
+              className={`h-full rounded-full transition-all duration-500 ease-out ${
                 progressPercent === 100
-                  ? 'bg-gradient-to-r from-green-500 to-emerald-500'
-                  : 'bg-gradient-to-r from-indigo-500 to-purple-500'
+                  ? 'bg-gradient-to-r from-success-400 to-success-500'
+                  : 'bg-gradient-to-r from-accent-400 to-soft-500'
               }`}
               style={{ width: `${progressPercent}%` }}
             />
@@ -219,8 +222,8 @@ export default function BookingSlots({ slots, confirmedAppointment, intent, book
         </div>
 
         {/* Slot list */}
-        <div className="space-y-1">
-          {getSlotsToShow().map((key) => {
+        <div className="space-y-2">
+          {getSlotsToShow().map((key, i) => {
             const label = SLOT_LABELS[key]
             const value = slots[key]
             const hasValue = value !== null && value !== undefined
@@ -228,20 +231,23 @@ export default function BookingSlots({ slots, confirmedAppointment, intent, book
             return (
               <div
                 key={key}
-                className={`flex items-center justify-between py-2.5 px-3 rounded-lg transition-all ${
-                  hasValue ? 'bg-green-900/20' : 'hover:bg-gray-800/30'
+                className={`flex items-center justify-between py-3 px-4 rounded-xl transition-all duration-300 animate-fade-in ${
+                  hasValue
+                    ? 'bg-success-50/80 border border-success-200'
+                    : 'bg-white/40 border border-surface-200 hover:bg-white/60'
                 }`}
+                style={{ animationDelay: `${i * 0.05}s` }}
               >
-                <span className="text-sm text-gray-400">{label}</span>
+                <span className={`text-sm ${hasValue ? 'text-success-700' : 'text-slate-500'}`}>{label}</span>
                 {hasValue ? (
-                  <span className="text-sm font-medium text-green-400 flex items-center gap-1.5">
-                    <Check size={14} className="text-green-500" />
+                  <span className="text-sm font-medium text-success-700 flex items-center gap-2">
+                    <Check size={14} className="text-success-500" />
                     {String(value)}
                   </span>
                 ) : (
-                  <span className="text-sm text-gray-600 flex items-center gap-1">
+                  <span className="text-sm text-slate-300 flex items-center gap-2">
                     <Circle size={10} className="opacity-50" />
-                    <span className="text-gray-600">&#8212;</span>
+                    <span>—</span>
                   </span>
                 )}
               </div>

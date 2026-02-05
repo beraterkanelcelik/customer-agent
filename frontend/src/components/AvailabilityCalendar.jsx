@@ -187,16 +187,19 @@ export default function AvailabilityCalendar({ appointmentType = null, onSlotSel
 
   if (loading && !availability) {
     return (
-      <div className="bg-gray-900/50 backdrop-blur border border-gray-800/50 rounded-2xl overflow-hidden shadow-xl">
-        <div className="px-5 py-4 bg-gradient-to-r from-gray-800/50 to-gray-800/30 border-b border-gray-700/50 flex items-center gap-2">
-          <div className="w-8 h-8 bg-gradient-to-br from-cyan-500 to-teal-600 rounded-lg flex items-center justify-center shadow-lg shadow-cyan-500/20">
-            <Calendar size={16} className="text-white" />
+      <div className="glass-card rounded-3xl overflow-hidden shadow-glass-lg">
+        <div className="px-5 py-4 bg-gradient-to-r from-white/80 to-surface-100/80 border-b border-surface-200/50 flex items-center gap-3">
+          <div className="w-10 h-10 bg-gradient-to-br from-accent-400 to-accent-500 rounded-xl flex items-center justify-center shadow-soft">
+            <Calendar size={18} className="text-white" />
           </div>
-          <h2 className="font-semibold text-white">Availability</h2>
+          <div>
+            <h2 className="font-semibold text-slate-800">Availability</h2>
+            <p className="text-xs text-slate-400">Available time slots</p>
+          </div>
         </div>
         <div className="p-8 text-center">
-          <RefreshCw size={28} className="mx-auto mb-3 animate-spin text-gray-500" />
-          <p className="text-sm text-gray-500">Loading availability...</p>
+          <RefreshCw size={28} className="mx-auto mb-4 animate-spin text-accent-400" />
+          <p className="text-sm text-slate-500 font-medium">Loading availability...</p>
         </div>
       </div>
     )
@@ -204,18 +207,21 @@ export default function AvailabilityCalendar({ appointmentType = null, onSlotSel
 
   if (error) {
     return (
-      <div className="bg-gray-900/50 backdrop-blur border border-gray-800/50 rounded-2xl overflow-hidden shadow-xl">
-        <div className="px-5 py-4 bg-gradient-to-r from-gray-800/50 to-gray-800/30 border-b border-gray-700/50 flex items-center gap-2">
-          <div className="w-8 h-8 bg-gradient-to-br from-cyan-500 to-teal-600 rounded-lg flex items-center justify-center shadow-lg shadow-cyan-500/20">
-            <Calendar size={16} className="text-white" />
+      <div className="glass-card rounded-3xl overflow-hidden shadow-glass-lg">
+        <div className="px-5 py-4 bg-gradient-to-r from-white/80 to-surface-100/80 border-b border-surface-200/50 flex items-center gap-3">
+          <div className="w-10 h-10 bg-gradient-to-br from-accent-400 to-accent-500 rounded-xl flex items-center justify-center shadow-soft">
+            <Calendar size={18} className="text-white" />
           </div>
-          <h2 className="font-semibold text-white">Availability</h2>
+          <div>
+            <h2 className="font-semibold text-slate-800">Availability</h2>
+            <p className="text-xs text-slate-400">Available time slots</p>
+          </div>
         </div>
-        <div className="p-5 text-center text-red-400">
-          <p className="text-sm">{error}</p>
+        <div className="p-6 text-center">
+          <p className="text-sm text-error-600 mb-4">{error}</p>
           <button
             onClick={fetchAvailability}
-            className="mt-3 px-4 py-2 bg-gray-800 rounded-lg text-xs hover:bg-gray-700 transition-colors"
+            className="px-4 py-2 bg-white/80 border border-surface-300 rounded-xl text-sm text-slate-600 hover:border-accent-300 hover:text-accent-600 transition-all duration-200"
           >
             Retry
           </button>
@@ -225,25 +231,28 @@ export default function AvailabilityCalendar({ appointmentType = null, onSlotSel
   }
 
   return (
-    <div className="bg-gray-900/50 backdrop-blur border border-gray-800/50 rounded-2xl overflow-hidden shadow-xl">
+    <div className="glass-card rounded-3xl overflow-hidden shadow-glass-lg">
       {/* Header */}
-      <div className="px-5 py-4 bg-gradient-to-r from-gray-800/50 to-gray-800/30 border-b border-gray-700/50 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-gradient-to-br from-cyan-500 to-teal-600 rounded-lg flex items-center justify-center shadow-lg shadow-cyan-500/20">
-            <Calendar size={16} className="text-white" />
+      <div className="px-5 py-4 bg-gradient-to-r from-white/80 to-surface-100/80 border-b border-surface-200/50 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-gradient-to-br from-accent-400 to-accent-500 rounded-xl flex items-center justify-center shadow-soft">
+            <Calendar size={18} className="text-white" />
           </div>
-          <h2 className="font-semibold text-white">Availability</h2>
+          <div>
+            <h2 className="font-semibold text-slate-800">Availability</h2>
+            <p className="text-xs text-slate-400">Available time slots</p>
+          </div>
         </div>
         <div className="flex items-center gap-3">
-          <span className="text-xs text-gray-500">
+          <span className="text-xs text-slate-400 bg-surface-100 px-2 py-1 rounded-md">
             {availability?.total_available || 0} slots
           </span>
           <button
             onClick={fetchAvailability}
-            className="p-1.5 hover:bg-gray-700 rounded-lg transition-colors"
+            className="p-2 hover:bg-surface-200/50 rounded-xl transition-all duration-200"
             title="Refresh"
           >
-            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            <RefreshCw size={14} className={`text-slate-500 ${loading ? 'animate-spin' : ''}`} />
           </button>
         </div>
       </div>
@@ -251,8 +260,8 @@ export default function AvailabilityCalendar({ appointmentType = null, onSlotSel
       <div className="p-5">
         {/* Vehicle Selector (for test drives or when no type specified) */}
         {(appointmentType === 'test_drive' || !appointmentType) && vehicles.length > 0 && (
-          <div className="mb-4">
-            <div className="text-xs text-gray-400 mb-2 flex items-center gap-1.5">
+          <div className="mb-5 animate-fade-in">
+            <div className="text-[10px] text-slate-400 mb-2 flex items-center gap-1.5 uppercase tracking-wider font-medium">
               <Car size={12} />
               Test Drive Vehicle
             </div>
@@ -261,14 +270,14 @@ export default function AvailabilityCalendar({ appointmentType = null, onSlotSel
                 <button
                   key={vehicle.id}
                   onClick={() => setSelectedVehicle(vehicle.id)}
-                  className={`px-3 py-2 rounded-lg text-xs transition-all ${
+                  className={`px-3 py-2.5 rounded-xl text-xs transition-all duration-200 ${
                     selectedVehicle === vehicle.id
-                      ? 'bg-gradient-to-br from-cyan-500 to-teal-600 text-white shadow-lg shadow-cyan-500/20'
-                      : 'bg-gray-800/50 text-gray-300 hover:bg-gray-800'
+                      ? 'bg-gradient-to-br from-accent-400 to-accent-500 text-white shadow-soft'
+                      : 'bg-white/60 border border-surface-200 text-slate-600 hover:border-accent-300 hover:bg-white'
                   }`}
                 >
-                  <div className="font-medium">{vehicle.year} {vehicle.make}</div>
-                  <div className="text-[10px] opacity-70">{vehicle.model} - {vehicle.color}</div>
+                  <div className="font-semibold">{vehicle.year} {vehicle.make}</div>
+                  <div className="text-[10px] opacity-70 mt-0.5">{vehicle.model} - {vehicle.color}</div>
                 </button>
               ))}
             </div>
@@ -280,27 +289,27 @@ export default function AvailabilityCalendar({ appointmentType = null, onSlotSel
           <button
             onClick={() => setWeekOffset(Math.max(0, weekOffset - 1))}
             disabled={weekOffset === 0}
-            className="p-1.5 hover:bg-gray-800 rounded-lg disabled:opacity-30 transition-colors"
+            className="p-2 hover:bg-surface-200/50 rounded-xl disabled:opacity-30 transition-all duration-200"
           >
-            <ChevronLeft size={18} />
+            <ChevronLeft size={18} className="text-slate-500" />
           </button>
 
-          <span className="text-sm text-gray-400">
+          <span className="text-sm text-slate-500 font-medium">
             {availability?.start_date} to {availability?.end_date}
           </span>
 
           <button
             onClick={() => setWeekOffset(weekOffset + 1)}
             disabled={weekOffset >= 3}
-            className="p-1.5 hover:bg-gray-800 rounded-lg disabled:opacity-30 transition-colors"
+            className="p-2 hover:bg-surface-200/50 rounded-xl disabled:opacity-30 transition-all duration-200"
           >
-            <ChevronRight size={18} />
+            <ChevronRight size={18} className="text-slate-500" />
           </button>
         </div>
 
         {/* Date Selector */}
-        <div className="grid grid-cols-7 gap-1.5 mb-4">
-          {availability?.days.slice(0, 14).map((day) => {
+        <div className="grid grid-cols-7 gap-1.5 mb-5">
+          {availability?.days.slice(0, 14).map((day, i) => {
             const isSelected = day.date === selectedDate
             const hasAvailable = day.is_open && day.slots.some(s => s.is_available)
             const dayNum = new Date(day.date + 'T12:00:00').getDate()
@@ -311,20 +320,21 @@ export default function AvailabilityCalendar({ appointmentType = null, onSlotSel
                 key={day.date}
                 onClick={() => setSelectedDate(day.date)}
                 disabled={!day.is_open}
-                className={`p-2 rounded-lg text-center transition-all ${
+                className={`p-2 rounded-xl text-center transition-all duration-200 animate-fade-in ${
                   isSelected
-                    ? 'bg-gradient-to-br from-cyan-500 to-teal-600 text-white shadow-lg shadow-cyan-500/20'
+                    ? 'bg-gradient-to-br from-accent-400 to-accent-500 text-white shadow-soft'
                     : !day.is_open
-                      ? 'bg-gray-800/30 text-gray-600 cursor-not-allowed'
+                      ? 'bg-surface-100/50 text-slate-300 cursor-not-allowed'
                       : hasAvailable
-                        ? 'bg-gray-800/50 hover:bg-gray-800 text-white'
-                        : 'bg-gray-800/30 text-gray-500'
+                        ? 'bg-white/60 border border-surface-200 hover:border-accent-300 hover:bg-white text-slate-700'
+                        : 'bg-surface-100/50 text-slate-400'
                 }`}
+                style={{ animationDelay: `${i * 0.02}s` }}
               >
-                <div className="text-[10px] uppercase">{dayAbbr}</div>
-                <div className="text-sm font-medium">{dayNum}</div>
+                <div className="text-[10px] uppercase font-medium">{dayAbbr}</div>
+                <div className="text-sm font-semibold mt-0.5">{dayNum}</div>
                 {hasAvailable && !isSelected && (
-                  <div className="w-1.5 h-1.5 bg-green-400 rounded-full mx-auto mt-1 shadow-lg shadow-green-400/50" />
+                  <div className="w-1.5 h-1.5 bg-success-400 rounded-full mx-auto mt-1" />
                 )}
               </button>
             )
@@ -333,24 +343,24 @@ export default function AvailabilityCalendar({ appointmentType = null, onSlotSel
 
         {/* Time Slots */}
         {selectedDayData && (
-          <div>
-            <div className="text-xs text-gray-400 mb-3 flex items-center gap-1.5">
+          <div className="animate-fade-in">
+            <div className="text-[10px] text-slate-400 mb-3 flex items-center gap-2 uppercase tracking-wider font-medium">
               <Clock size={12} />
               {selectedDayData.day_name}, {selectedDate}
               {selectedVehicle && appointmentType === 'test_drive' && (
-                <span className="text-cyan-400 ml-2">
+                <span className="text-accent-500 ml-1 normal-case">
                   - {getSelectedVehicleName()}
                 </span>
               )}
             </div>
 
             {!selectedDayData.is_open ? (
-              <div className="text-center py-4 text-gray-500 text-sm">
+              <div className="text-center py-6 text-slate-400 text-sm bg-surface-100/50 rounded-xl">
                 Closed on Sundays
               </div>
             ) : (
               <div className="grid grid-cols-4 gap-2 max-h-48 overflow-y-auto">
-                {getAllSlots().map(({ time, slots, isAvailable, isBooked }) => (
+                {getAllSlots().map(({ time, slots, isAvailable, isBooked }, i) => (
                   <button
                     key={time}
                     onClick={() => isAvailable && onSlotSelect?.({
@@ -361,20 +371,21 @@ export default function AvailabilityCalendar({ appointmentType = null, onSlotSel
                       vehicle_name: slots[0].vehicle_name
                     })}
                     disabled={!isAvailable}
-                    className={`px-2 py-2 rounded-lg text-xs transition-all ${
+                    className={`px-2 py-2.5 rounded-xl text-xs transition-all duration-200 animate-fade-in ${
                       isAvailable
-                        ? 'bg-green-900/20 border border-green-700/30 text-green-300 hover:bg-green-800/30 hover:border-green-600/50 cursor-pointer'
-                        : 'bg-red-900/30 border border-red-700/40 text-red-400 cursor-not-allowed opacity-70'
+                        ? 'bg-success-50 border border-success-200 text-success-700 hover:bg-success-100 hover:border-success-300 cursor-pointer'
+                        : 'bg-error-50/50 border border-error-100 text-error-400 cursor-not-allowed'
                     }`}
+                    style={{ animationDelay: `${i * 0.02}s` }}
                   >
-                    <span>{formatTime(time)}</span>
+                    <span className="font-medium">{formatTime(time)}</span>
                     {isBooked && (
-                      <div className="text-[10px] mt-0.5 text-red-500">Booked</div>
+                      <div className="text-[10px] mt-0.5 text-error-400">Booked</div>
                     )}
                   </button>
                 ))}
                 {getAllSlots().length === 0 && (
-                  <div className="col-span-4 text-center py-4 text-gray-500 text-sm">
+                  <div className="col-span-4 text-center py-6 text-slate-400 text-sm bg-surface-100/50 rounded-xl">
                     No slots for this day
                   </div>
                 )}
