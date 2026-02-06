@@ -14,6 +14,7 @@ import io
 import os
 import logging
 import asyncio
+import re
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
@@ -148,6 +149,11 @@ class AudioProcessor:
             text = await loop.run_in_executor(_executor, _transcribe)
             text = text.strip()
 
+            # Filter garbage/hallucinated transcriptions (repeated chars, etc.)
+            if text and self._is_garbage_transcription(text):
+                logger.warning(f"[STT] Filtered garbage transcription: '{text}'")
+                return None
+
             if text:
                 logger.info(f"[STT] Transcribed: '{text[:100]}...'")
             else:
@@ -225,6 +231,45 @@ class AudioProcessor:
         except Exception as e:
             logger.error(f"[TTS] Synthesis error: {e}")
             return None
+
+    @staticmethod
+    def _is_garbage_transcription(text: str) -> bool:
+        """Filter garbage output from Whisper (repeated chars, hallucinations on silence)."""
+        stripped = text.strip()
+
+        if len(stripped) < 2:
+            return True
+
+        # Repeated single character (like "________", "......")
+        if re.match(r'^(.)\1{2,}$', stripped):
+            return True
+
+        # Mostly non-alphanumeric characters (underscores, dots, dashes)
+        alnum = sum(1 for c in stripped if c.isalnum() or c == ' ')
+        if len(stripped) > 3 and alnum / len(stripped) < 0.3:
+            return True
+
+        # Common Whisper hallucinations on silence/noise
+        lower = stripped.lower().rstrip('.!?, ')
+        hallucinations = {
+            "thanks for watching", "thank you for watching",
+            "thanks for listening", "thank you for listening",
+            "please subscribe", "like and subscribe",
+            "see you next time", "see you in the next video",
+            "subtitles by", "translated by",
+        }
+        if lower in hallucinations:
+            return True
+
+        # Bracketed markers like [Music], [Silence]
+        if re.match(r'^\[.*\]$', stripped):
+            return True
+
+        # Music note symbols
+        if re.match(r'^[♪♫\s]+$', stripped):
+            return True
+
+        return False
 
     def _bytes_to_numpy(self, audio_bytes: bytes) -> np.ndarray:
         """Convert audio bytes to float32 numpy array for Whisper."""

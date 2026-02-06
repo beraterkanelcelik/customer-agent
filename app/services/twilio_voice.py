@@ -354,16 +354,12 @@ class TwilioVoiceService:
 
     # ==================== Audio Processing ====================
 
-    async def process_audio_chunk(self, stream_sid: str, payload: str) -> Optional[bytes]:
+    def process_audio_chunk(self, stream_sid: str, payload: str) -> Optional[bytes]:
         """
-        Process incoming audio chunk from Twilio Media Stream.
+        Process incoming audio chunk for VAD only (no STT/LLM/TTS).
 
-        Args:
-            stream_sid: The stream SID
-            payload: Base64 encoded mulaw audio
-
-        Returns:
-            Response audio bytes if ready, None otherwise
+        Returns raw mulaw utterance bytes when end of speech detected, None otherwise.
+        Caller is responsible for processing the utterance asynchronously.
         """
         call = self.get_call_by_stream(stream_sid)
         if not call:
@@ -374,24 +370,17 @@ class TwilioVoiceService:
 
         # Calculate energy for VAD
         try:
-            # Convert mulaw to linear for energy calculation
             linear = audioop.ulaw2lin(audio_data, 2)
             energy = audioop.rms(linear, 2)
         except Exception:
             energy = 0
 
-        # Voice Activity Detection with barge-in support
+        # Voice Activity Detection
         if energy > self.SILENCE_THRESHOLD:
             call.silence_frames = 0
             if not call.is_speaking:
                 call.is_speaking = True
                 logger.debug(f"[{call.session_id}] Speech started")
-
-                # Barge-in: If we're playing audio and user starts speaking, interrupt
-                if call.is_playing_audio:
-                    call.barge_in_requested = True
-                    logger.info(f"[{call.session_id}] User started speaking during playback - barge-in triggered")
-
             call.audio_buffer += audio_data
         else:
             if call.is_speaking:
@@ -401,20 +390,15 @@ class TwilioVoiceService:
                 if call.silence_frames >= self.MIN_SILENCE_FRAMES:
                     # End of utterance detected
                     call.is_speaking = False
-                    logger.info(f"[{call.session_id}] Speech ended, processing {len(call.audio_buffer)} bytes")
-
-                    # Process the complete utterance
-                    response_audio = await self._process_utterance(call)
-
-                    # Clear buffer
+                    utterance = call.audio_buffer
                     call.audio_buffer = bytes()
                     call.silence_frames = 0
-
-                    return response_audio
+                    logger.info(f"[{call.session_id}] Speech ended, {len(utterance)} bytes captured")
+                    return utterance
 
         return None
 
-    async def _process_utterance(self, call: ActiveCall) -> Optional[bytes]:
+    async def _process_utterance(self, call: ActiveCall, utterance_audio: bytes) -> Optional[bytes]:
         """
         Process a complete utterance: STT -> LLM -> TTS.
 
@@ -429,7 +413,7 @@ class TwilioVoiceService:
         # Convert mulaw to wav for STT
         try:
             # Convert mulaw 8kHz to linear PCM
-            linear = audioop.ulaw2lin(call.audio_buffer, 2)
+            linear = audioop.ulaw2lin(utterance_audio, 2)
             # Resample to 16kHz for better STT
             linear_16k = audioop.ratecv(linear, 2, 1, 8000, 16000, None)[0]
 
@@ -657,6 +641,12 @@ class TwilioVoiceService:
             logger.warning(f"[{session_id}] Cannot queue event - call not found")
             return
 
+        # Deduplicate: don't queue if same event type already pending
+        for existing in call.pending_events:
+            if existing.get("type") == event_type:
+                logger.info(f"[{session_id}] Skipping duplicate event: {event_type} (already queued)")
+                return
+
         event = {
             "type": event_type,
             "message": message,
@@ -759,6 +749,12 @@ class TwilioVoiceService:
         frontend_status = status
         escalation_in_progress = True  # Default to true, set false on terminal states
 
+        # Guard: ignore duplicate terminal status updates (watchdog + callback race)
+        if call.human_call_status in (HumanCallStatus.FAILED, HumanCallStatus.COMPLETED) and \
+                status not in ("initiated", "ringing", "in-progress"):
+            logger.info(f"[{session_id}] Ignoring duplicate terminal status '{status}' - already {call.human_call_status.value}")
+            return
+
         if status == "initiated":
             call.human_call_status = HumanCallStatus.CALLING
             frontend_status = "calling"
@@ -857,6 +853,11 @@ class TwilioVoiceService:
         call = self.get_call_by_session(session_id)
         if not call:
             logger.warning(f"[{session_id}] Cannot handle decline - call not found")
+            return False
+
+        # Guard: ignore if already in terminal state (race with completed callback)
+        if call.human_call_status in (HumanCallStatus.FAILED, HumanCallStatus.COMPLETED):
+            logger.info(f"[{session_id}] Ignoring decline - already {call.human_call_status.value}")
             return False
 
         logger.info(f"[{session_id}] Human declined the call")
@@ -1014,7 +1015,14 @@ class TwilioVoiceService:
                 # Event names: initiated, ringing, answered, completed
                 # Note: "answered" event sends CallStatus="in-progress" in the callback
                 status_callback_event=["initiated", "ringing", "answered", "completed"],
-                timeout=45  # Give more time for the two-step confirmation
+                timeout=45,  # Give more time for the two-step confirmation
+                # Async AMD: detect voicemail and hang up before leaving a message
+                # When declined, carrier forwards to voicemail which "answers" the call.
+                # Without AMD, Twilio plays our Gather TwiML to voicemail = fake "second call".
+                machine_detection='DetectMessageEnd',
+                async_amd=True,
+                async_amd_status_callback=f"{settings.twilio_webhook_base_url}/api/voice/human-amd?session_id={call.session_id}",
+                async_amd_status_callback_method='POST'
             )
 
             call.human_call_sid = human_call.sid
@@ -1086,7 +1094,13 @@ class TwilioVoiceService:
             if current_status == HumanCallStatus.CALLING and elapsed > 15:
                 logger.info(f"[{session_id}] Watchdog: Still in CALLING state after {elapsed:.0f}s, checking via API")
                 await self._check_and_update_call_status(session_id, human_call_sid)
-                # Don't break - let the status update trigger the appropriate action
+                # Re-check status after API poll - break if now terminal
+                call_recheck = self.get_call_by_session(session_id)
+                if call_recheck and call_recheck.human_call_status in (
+                    HumanCallStatus.FAILED, HumanCallStatus.COMPLETED,
+                    HumanCallStatus.IN_CONFERENCE, HumanCallStatus.CONFIRMED
+                ):
+                    break
 
             last_status = current_status
 
